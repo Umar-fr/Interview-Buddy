@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/src/styles.css" />
+  <title>InterviewBuddy</title>
+</head>
+
+<body>
+  <div id="app">
+    <!-- Titlebar -->
+    <div class="titlebar">
+      <div class="title-section">
+        <div class="title">InterviewBuddy</div>
+        <div id="audio-badge" class="audio-badge inactive">
+          <span class="status-dot"></span>
+          <span id="audio-status-label">Initializing...</span>
+        </div>
+        <button id="ai-settings-btn" class="ai-badge-btn" title="Configure Gemini API Key">
+          <span class="ai-icon">✦</span>
+          <span id="ai-badge-label">Gemini AI</span>
+        </button>
+      </div>
+
+      <div class="window-controls">
+        <button id="minimize" title="Minimize">−</button>
+        <button id="close" title="Close">×</button>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main>
+      <!-- Audio Monitor -->
+      <div class="audio-monitor">
+        <div class="audio-meter-container">
+          <div id="audio-meter-bar" class="audio-meter-bar"></div>
+        </div>
+        <div class="monitor-info">
+          <div id="status-detail" class="status-detail">Starting macOS system audio capture...</div>
+          <div id="model-status" class="model-status">Loading Whisper model...</div>
+        </div>
+      </div>
+
+      <!-- Split Container: Transcript & AI Copilot -->
+      <div class="content-split">
+        <!-- Live Transcript Section -->
+        <div class="transcript-wrapper">
+          <div class="transcript-toolbar">
+            <span class="toolbar-title">Live Transcript</span>
+            <div class="toolbar-actions">
+              <button id="copy-btn" class="tool-btn" title="Copy entire transcript">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span>Copy</span>
+              </button>
+              <button id="clear-btn" class="tool-btn" title="Clear transcript">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                <span>Clear</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="transcript" class="transcript-box">
+            <div id="placeholder" class="placeholder">
+              Capturing system audio (YouTube, Zoom, meetings, media). Transcribing in real time...
+            </div>
+          </div>
+        </div>
+
+        <!-- Gemini AI Copilot Section -->
+        <div class="ai-wrapper">
+          <div class="ai-toolbar">
+            <div class="ai-toolbar-left">
+              <span class="ai-sparkle">✦</span>
+              <span class="toolbar-title">Gemini Answers</span>
+            </div>
+            <div class="ai-toolbar-right">
+              <label class="auto-answer-toggle" title="Automatically answer questions detected in speech">
+                <input type="checkbox" id="auto-answer-checkbox" checked />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Auto-Answer</span>
+              </label>
+              <button id="clear-ai-btn" class="tool-btn" title="Clear AI answers">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              </button>
+            </div>
+          </div>
+
+          <div id="ai-answers" class="ai-box">
+            <div id="ai-placeholder" class="ai-placeholder">
+              <span class="ai-empty-icon">✦</span>
+              <p>Gemini AI is ready to detect and answer questions, quizzes, or tests from the live audio stream.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- API Key Setup Modal -->
+  <div id="api-key-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon">✦</div>
+          <div>
+            <h2 class="modal-title">Gemini AI Setup</h2>
+            <p class="modal-subtitle">Power real-time question answering with Google Gemini</p>
+          </div>
+        </div>
+        <button id="modal-close-btn" class="modal-close-btn" title="Close">×</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="api-key-input">Gemini API Key</label>
+          <div class="input-password-wrapper">
+            <input type="password" id="api-key-input" placeholder="AIzaSy..." autocomplete="off" spellcheck="false" />
+            <button id="toggle-key-visibility" type="button" class="btn-toggle-eye" title="Show/Hide Key">👁</button>
+          </div>
+          <span class="form-hint">
+            Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" id="open-ai-studio-link">Google AI Studio</a>.
+          </span>
+        </div>
+
+        <div class="form-group">
+          <div class="label-with-action">
+            <label for="model-select">Model</label>
+            <button id="refresh-models-btn" type="button" class="btn-text-action" title="Fetch available models from Gemini API">⟳ Detect Models</button>
+          </div>
+          <select id="model-select" disabled>
+            <option value="" disabled selected>Enter your API key above to detect models...</option>
+          </select>
+          <span id="model-detect-hint" class="form-hint">
+            Available models will be fetched live from your Gemini API key.
+          </span>
+        </div>
+
+        <div class="form-group-checkbox">
+          <label class="remember-key-label" for="remember-key-checkbox">
+            <input type="checkbox" id="remember-key-checkbox" />
+            <span>Remember API key on this device for future sessions</span>
+          </label>
+        </div>
+
+        <div id="modal-status-msg" class="modal-status-msg hidden"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="save-key-btn" class="btn-primary">
+          <span id="save-key-btn-text">Save & Connect</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>
