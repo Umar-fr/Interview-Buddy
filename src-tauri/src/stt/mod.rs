@@ -7,8 +7,8 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
 
-const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const MODEL_FILE_NAME: &str = "ggml-tiny.en.bin";
+const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
+const MODEL_FILE_NAME: &str = "ggml-base.en.bin";
 
 pub struct WhisperEngine {
     _ctx: WhisperContext,
@@ -55,6 +55,11 @@ impl WhisperEngine {
             .map(|p| (p.get() as i32).clamp(2, 8))
             .unwrap_or(4);
         params.set_n_threads(n_threads);
+
+        // Anti-hallucination filters
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
+        params.set_no_speech_thold(0.6);
 
         self.state
             .full(params, samples)
@@ -107,7 +112,7 @@ where
         }
     }
 
-    progress_callback("Downloading Whisper tiny.en model (~75MB)...");
+    progress_callback("Downloading Whisper base.en model (~140MB)...");
 
     let response = reqwest::blocking::get(MODEL_DOWNLOAD_URL)
         .map_err(|e| format!("Failed to request Whisper model: {}", e))?;

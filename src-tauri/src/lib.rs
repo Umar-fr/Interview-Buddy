@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
 use cocoa::base::id;
@@ -54,6 +55,20 @@ fn configure_macos_window(window: &WebviewWindow) {
             setMovableByWindowBackground: true
         ];
     }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_window(window: &WebviewWindow) {
+    if let Ok(hwnd_val) = window.hwnd() {
+        let hwnd_isize = hwnd_val.0 as isize;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+        unsafe {
+            let _ = SetWindowDisplayAffinity(HWND(hwnd_isize as _), WDA_EXCLUDEFROMCAPTURE);
+        }
+    }
+    let _ = window.set_skip_taskbar(true);
+    let _ = window.set_title("Calculator");
 }
 
 /// Global audio capture state managed by Tauri.
@@ -297,15 +312,49 @@ fn minimize_app(window: WebviewWindow) {
     let _ = window.minimize();
 }
 
+#[tauri::command]
+fn take_screenshot() -> Result<String, String> {
+    let screens = screenshots::Screen::all().map_err(|e| format!("Failed to get screens: {}", e))?;
+    let screen = screens.first().ok_or("No screens found")?;
+    let image = screen.capture().map_err(|e| format!("Failed to capture: {}", e))?;
+    
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut cursor, screenshots::image::ImageFormat::Png).map_err(|e| format!("Failed to encode png: {}", e))?;
+    let buffer = cursor.into_inner();
+    
+    use base64::{Engine as _, engine::general_purpose};
+    let b64 = general_purpose::STANDARD.encode(buffer);
+    Ok(b64)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if shortcut.matches(Modifiers::ALT, Code::KeyR) {
+                            if let Some(win) = app.get_webview_window("main") {
+                                if win.is_visible().unwrap_or(true) {
+                                    let _ = win.hide();
+                                } else {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
+                            }
+                        }
+                    }
+                })
+                .build(),
+        )
         .manage(AppAudioState::default())
         .invoke_handler(tauri::generate_handler![
             start_system_audio_capture,
             stop_system_audio_capture,
             close_app,
-            minimize_app
+            minimize_app,
+            take_screenshot
         ])
         .setup(|app| {
             let window = app
@@ -315,10 +364,11 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             configure_macos_window(&window);
 
-            // Automatically initiate system audio capture & transcription on startup
-            let app_handle = app.handle().clone();
-            let state = app.state::<AppAudioState>();
-            let _ = start_system_audio_capture(app_handle, state);
+            #[cfg(target_os = "windows")]
+            configure_windows_window(&window);
+
+            let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyR);
+            let _ = app.handle().global_shortcut().register(shortcut);
 
             Ok(())
         })

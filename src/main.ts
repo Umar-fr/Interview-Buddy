@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCodingPrompt } from "./prompts/coding";
 
 const appWindow = getCurrentWindow();
 
@@ -61,6 +62,11 @@ const saveKeyBtn = document.getElementById("save-key-btn");
 const saveKeyBtnText = document.getElementById("save-key-btn-text");
 const toggleKeyVisibilityBtn = document.getElementById("toggle-key-visibility");
 const modalStatusMsg = document.getElementById("modal-status-msg");
+const resumeInput = document.getElementById("resume-input") as HTMLTextAreaElement | null;
+const resumeFile = document.getElementById("resume-file") as HTMLInputElement | null;
+const resumeAnalyzeBtn = document.getElementById("resume-analyze-btn") as HTMLButtonElement | null;
+const manualAiQuery = document.getElementById("manual-ai-query") as HTMLInputElement | null;
+const manualAiBtn = document.getElementById("manual-ai-btn") as HTMLButtonElement | null;
 
 const refreshModelsBtn = document.getElementById("refresh-models-btn") as HTMLButtonElement | null;
 const modelDetectHint = document.getElementById("model-detect-hint");
@@ -74,6 +80,86 @@ const STORAGE_KEY_MODEL = "gemini_model";
 
 let geminiApiKey: string = localStorage.getItem(STORAGE_KEY_API_KEY) || "";
 let selectedModel: string = localStorage.getItem(STORAGE_KEY_MODEL) || "";
+let userResume: string = localStorage.getItem("userResume") || "";
+
+if (resumeInput) {
+  resumeInput.value = userResume;
+  resumeInput.addEventListener("input", () => {
+    userResume = resumeInput.value;
+    localStorage.setItem("userResume", userResume);
+  });
+}
+
+resumeAnalyzeBtn?.addEventListener("click", async () => {
+  if (!geminiApiKey) {
+    if (modalStatusMsg) {
+      modalStatusMsg.textContent = "Please set API Key first.";
+      modalStatusMsg.className = "modal-status-msg error";
+      modalStatusMsg.classList.remove("hidden");
+    }
+    return;
+  }
+  
+  const file = resumeFile?.files?.[0];
+  if (!file) {
+    if (modalStatusMsg) {
+      modalStatusMsg.textContent = "Please select a file first.";
+      modalStatusMsg.className = "modal-status-msg error";
+      modalStatusMsg.classList.remove("hidden");
+    }
+    return;
+  }
+
+  try {
+    resumeAnalyzeBtn.textContent = "Analyzing...";
+    resumeAnalyzeBtn.disabled = true;
+    
+    const buffer = await file.arrayBuffer();
+    const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+    const mimeType = file.type || "application/pdf";
+    
+    const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel || 'gemini-2.0-flash'}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:generateContent?key=${geminiApiKey}`;
+    
+    const prompt = "Extract a concise, detailed, first-person summary of this resume. Include the core skills, past roles, and domain expertise. This will be used as a persona profile for an AI assistant to impersonate me.";
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType, data: base64 } }
+          ]
+        }]
+      })
+    });
+    
+    if (!response.ok) throw new Error("API Error or unsupported file type.");
+    
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    
+    userResume = text.trim();
+    if (resumeInput) resumeInput.value = userResume;
+    localStorage.setItem("userResume", userResume);
+    
+    if (modalStatusMsg) {
+      modalStatusMsg.textContent = "Resume analyzed successfully!";
+      modalStatusMsg.className = "modal-status-msg success";
+      modalStatusMsg.classList.remove("hidden");
+    }
+  } catch (err: any) {
+    if (modalStatusMsg) {
+      modalStatusMsg.textContent = `Error: ${err.message}`;
+      modalStatusMsg.className = "modal-status-msg error";
+      modalStatusMsg.classList.remove("hidden");
+    }
+  } finally {
+    resumeAnalyzeBtn.textContent = "Analyze";
+    resumeAnalyzeBtn.disabled = false;
+  }
+});
 
 function updateAiBadgeState() {
   if (aiBadgeBtn && aiBadgeLabel) {
@@ -384,6 +470,38 @@ window.addEventListener("DOMContentLoaded", () => {
       openApiKeyModal();
     }, 400);
   }
+
+  // Start background processes after UI is ready to catch status events
+  setTimeout(async () => {
+    try {
+      await invoke("start_system_audio_capture");
+    } catch (e) {
+      console.error("Failed to start audio capture:", e);
+    }
+  }, 500);
+});
+
+document.addEventListener("mousedown", (e) => {
+  const target = e.target as HTMLElement;
+  if (
+    target.tagName === "BUTTON" ||
+    target.tagName === "INPUT" ||
+    target.tagName === "SELECT" ||
+    target.tagName === "TEXTAREA" ||
+    target.closest("button") ||
+    target.closest("input") ||
+    target.closest("select") ||
+    target.closest("textarea") ||
+    target.closest(".modal-card") ||
+    target.closest(".transcript-box") ||
+    target.closest(".ai-box") ||
+    target.closest(".window-controls")
+  ) {
+    return;
+  }
+  if (e.button === 0) {
+    appWindow.startDragging();
+  }
 });
 
 // ==========================================
@@ -427,8 +545,11 @@ async function requestGeminiAnswer(questionText: string, contextHistory: string)
   const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel}`;
   const url = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:generateContent?key=${geminiApiKey}`;
 
-  const prompt = `You are an expert real-time assistant and copilot listening to live audio (such as a meeting, lecture, quiz, English test, or interview).
-Your task is to analyze the recent audio context and directly answer the question or exercise being asked.
+  const promptContext = userResume ? `\nMy Background/Resume for context:\n${userResume}\n` : "";
+  
+  const prompt = `You are me. I am currently in a live technical interview. I will provide you with the transcript of what the interviewer is saying.
+${promptContext}
+Analyze the live interview transcript and provide a response that I can read out loud to the interviewer.
 
 Context of recent speech:
 """
@@ -441,9 +562,11 @@ ${questionText}
 """
 
 Instructions:
-1. Provide the direct, accurate, and concise answer immediately.
-2. If this is a multiple-choice question, explicitly state the correct option and letter (e.g. "**Option B: will be arriving**").
-3. Keep your explanation to 1-2 short sentences maximum so the user can read it instantly.`;
+1. Speak in the first person ("I", "my") as if you are me answering the question naturally.
+2. Provide a detailed, highly accurate, and comprehensive answer that flows like natural human speech.
+3. If they ask a direct technical question, explain the reasoning clearly and deeply so I sound knowledgeable.
+4. Keep the tone professional, confident, and conversational.
+5. If it's a multiple choice question being read aloud, identify the correct answer explicitly in a conversational way.`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -602,6 +725,20 @@ clearAiBtn?.addEventListener("click", () => {
       </div>
     `;
   }
+});
+
+// Manual AI Query
+function handleManualQuery() {
+  const query = manualAiQuery?.value.trim();
+  if (query) {
+    triggerAiQuestionAnswer(query, true);
+    if (manualAiQuery) manualAiQuery.value = "";
+  }
+}
+
+manualAiBtn?.addEventListener("click", handleManualQuery);
+manualAiQuery?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") handleManualQuery();
 });
 
 // ==========================================
@@ -784,5 +921,281 @@ listen<AudioLevelPayload>("audio-level", (event) => {
 
   if (statusDetail && rms > 0.005) {
     statusDetail.textContent = `Capturing audio (Peak: ${(peak * 100).toFixed(0)}%, RMS: ${(rms * 100).toFixed(1)}%)`;
+  }
+});
+
+// ==========================================
+// DSA Coding Mode
+// ==========================================
+const codingModal = document.getElementById("coding-modal");
+const codingCloseBtn = document.getElementById("coding-modal-close-btn");
+const codingModeBtn = document.getElementById("coding-mode-btn");
+const codingInput = document.getElementById("coding-input") as HTMLTextAreaElement | null;
+const codingLangSelect = document.getElementById("coding-lang-select") as HTMLSelectElement | null;
+const solveBtn = document.getElementById("solve-btn") as HTMLButtonElement | null;
+const solveBtnText = document.getElementById("solve-btn-text");
+const codingOutput = document.getElementById("coding-output");
+const codingResultContainer = document.getElementById("coding-result-container");
+const codingCopyBtn = document.getElementById("coding-copy-btn");
+const codingStatusMsg = document.getElementById("coding-status-msg");
+const codingScreenshotBtn = document.getElementById("coding-screenshot-btn") as HTMLButtonElement | null;
+const codingScreenshotPreview = document.getElementById("coding-screenshot-preview");
+const codingScreenshotImg = document.getElementById("coding-screenshot-img") as HTMLImageElement | null;
+const codingScreenshotRemove = document.getElementById("coding-screenshot-remove");
+let currentScreenshots: string[] = [];
+
+const STORAGE_KEY_LANG = "coding_language";
+
+function openCodingModal() {
+  if (codingModal) codingModal.classList.remove("hidden");
+  if (codingInput) {
+    const sel = window.getSelection()?.toString();
+    if (sel && sel.trim().length > 0) codingInput.value = sel;
+    codingInput.focus();
+  }
+  if (codingLangSelect) {
+    const saved = localStorage.getItem(STORAGE_KEY_LANG);
+    if (saved) codingLangSelect.value = saved;
+  }
+  if (codingResultContainer) codingResultContainer.classList.add("hidden");
+  if (codingOutput) codingOutput.textContent = "";
+  if (codingStatusMsg) {
+    codingStatusMsg.classList.add("hidden");
+    codingStatusMsg.textContent = "";
+  }
+  
+  currentScreenshots = [];
+  if (codingScreenshotPreview) {
+    codingScreenshotPreview.innerHTML = "";
+    codingScreenshotPreview.style.display = "none";
+  }
+  if (codingScreenshotBtn) codingScreenshotBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg> Take Screenshot`;
+}
+
+function closeCodingModal() {
+  if (codingModal) codingModal.classList.add("hidden");
+}
+
+codingModeBtn?.addEventListener("click", () => openCodingModal());
+codingCloseBtn?.addEventListener("click", () => closeCodingModal());
+
+codingLangSelect?.addEventListener("change", () => {
+  if (codingLangSelect.value) {
+    localStorage.setItem(STORAGE_KEY_LANG, codingLangSelect.value);
+  }
+});
+
+codingCopyBtn?.addEventListener("click", async () => {
+  if (codingOutput && codingOutput.textContent) {
+    await navigator.clipboard.writeText(codingOutput.textContent);
+    if (codingCopyBtn) {
+      codingCopyBtn.textContent = "Copied!";
+      setTimeout(() => { codingCopyBtn.textContent = "Copy Code"; }, 1500);
+    }
+  }
+});
+
+codingScreenshotBtn?.addEventListener("click", async () => {
+  if (codingScreenshotBtn) codingScreenshotBtn.disabled = true;
+  try {
+    if (codingScreenshotBtn) codingScreenshotBtn.innerHTML = `Capturing...`;
+    
+    // Wait a tiny bit for UI update
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    const b64 = await invoke<string>("take_screenshot");
+    currentScreenshots.push(b64);
+    
+    if (codingScreenshotPreview) {
+      codingScreenshotPreview.style.display = "flex";
+      
+      const imgContainer = document.createElement("div");
+      imgContainer.style.position = "relative";
+      imgContainer.style.flexShrink = "0";
+      
+      const img = document.createElement("img");
+      img.src = "data:image/png;base64," + b64;
+      img.style.maxHeight = "150px";
+      img.style.borderRadius = "6px";
+      img.style.border = "1px solid rgba(255,255,255,0.2)";
+      
+      const removeBtn = document.createElement("button");
+      removeBtn.innerHTML = "×";
+      removeBtn.style.position = "absolute";
+      removeBtn.style.top = "-6px";
+      removeBtn.style.right = "-6px";
+      removeBtn.style.background = "#ef4444";
+      removeBtn.style.color = "white";
+      removeBtn.style.border = "none";
+      removeBtn.style.borderRadius = "50%";
+      removeBtn.style.width = "20px";
+      removeBtn.style.height = "20px";
+      removeBtn.style.cursor = "pointer";
+      removeBtn.style.display = "flex";
+      removeBtn.style.alignItems = "center";
+      removeBtn.style.justifyContent = "center";
+      removeBtn.style.fontSize = "14px";
+      removeBtn.style.fontWeight = "bold";
+      
+      removeBtn.onclick = () => {
+        const idx = currentScreenshots.indexOf(b64);
+        if (idx !== -1) currentScreenshots.splice(idx, 1);
+        imgContainer.remove();
+        if (currentScreenshots.length === 0 && codingScreenshotPreview) {
+          codingScreenshotPreview.style.display = "none";
+        }
+      };
+      
+      imgContainer.appendChild(img);
+      imgContainer.appendChild(removeBtn);
+      codingScreenshotPreview.appendChild(imgContainer);
+    }
+    
+    if (codingScreenshotBtn) codingScreenshotBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg> Add Another Screenshot`;
+  } catch (err: any) {
+    showCodingStatus(`Screenshot failed: ${err}`, "error");
+  } finally {
+    if (codingScreenshotBtn) codingScreenshotBtn.disabled = false;
+  }
+});
+// Remove single screenshot logic replaced by dynamic array rendering above
+// Removed codingScreenshotRemove click listener as it is built into the imgContainer
+
+solveBtn?.addEventListener("click", async () => {
+  const problem = codingInput?.value.trim() || "Solve the problem shown in the image.";
+  const lang = codingLangSelect?.value || "Python";
+  
+  if (!codingInput?.value.trim() && currentScreenshots.length === 0) {
+    showCodingStatus("Please enter a problem description or take a screenshot.", "error");
+    return;
+  }
+  if (!geminiApiKey) {
+    showCodingStatus("Please set your Gemini API key first.", "error");
+    return;
+  }
+
+  if (solveBtnText) solveBtnText.textContent = "Solving...";
+  if (solveBtn) solveBtn.disabled = true;
+  if (codingResultContainer) codingResultContainer.classList.add("hidden");
+  showCodingStatus("", "success"); // clear
+
+  try {
+    const prompt = getCodingPrompt(lang, problem);
+    const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel || 'gemini-2.0-flash'}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:generateContent?key=${geminiApiKey}`;
+
+    const parts: any[] = [{ text: prompt }];
+    for (const b64 of currentScreenshots) {
+      parts.push({
+        inlineData: {
+          mimeType: "image/png",
+          data: b64
+        }
+      });
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: 0.1,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    
+    if (text.includes("NOT_A_CODING_PROBLEM")) {
+      showCodingStatus("The input does not appear to be a coding problem.", "error");
+      return;
+    }
+
+    // Extract code block and explanation
+    const match = text.match(/```[\w+]*\n([\s\S]*?)```/);
+    const code = match ? match[1].trim() : text.trim();
+    const explanation = text.replace(/```[\w+]*\n[\s\S]*?```/, "").trim();
+
+    if (aiAnswersBox) {
+      if (aiPlaceholder && aiPlaceholder.parentElement) {
+        aiPlaceholder.remove();
+      }
+      
+      const isScrolledToBottom = aiAnswersBox.scrollHeight - aiAnswersBox.scrollTop <= aiAnswersBox.clientHeight + 60;
+      
+      const card = document.createElement("div");
+      card.className = "ai-answer-card";
+      
+      const cardHeader = document.createElement("div");
+      cardHeader.className = "ai-answer-header";
+      cardHeader.innerHTML = `
+        <span class="ai-sparkle">✦</span>
+        <span>DSA Solution (${lang})</span>
+        <span class="ai-answer-time">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+      `;
+      
+      const cardAnswer = document.createElement("div");
+      cardAnswer.className = "ai-answer-body markdown-body";
+      cardAnswer.innerHTML = `<pre style="margin:0; padding:12px; background:#1e1e1e; border-radius:6px; overflow-x:auto;"><code style="font-family:monospace; color:#d4d4d4;">${code.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</code></pre>`;
+      
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "btn-text-action";
+      copyBtn.style.marginTop = "8px";
+      copyBtn.textContent = "Copy Solution";
+      copyBtn.onclick = async () => {
+        await navigator.clipboard.writeText(code);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => copyBtn.textContent = "Copy Solution", 1500);
+      };
+      cardAnswer.appendChild(copyBtn);
+      
+      if (explanation) {
+        const explDiv = document.createElement("div");
+        explDiv.style.marginTop = "10px";
+        explDiv.style.fontSize = "12px";
+        explDiv.style.color = "rgba(255,255,255,0.85)";
+        explDiv.textContent = explanation;
+        cardAnswer.appendChild(explDiv);
+      }
+      
+      card.appendChild(cardHeader);
+      card.appendChild(cardAnswer);
+      aiAnswersBox.appendChild(card);
+      
+      if (isScrolledToBottom) {
+        aiAnswersBox.scrollTop = aiAnswersBox.scrollHeight;
+      }
+    }
+    
+    // Close the coding modal automatically
+    closeCodingModal();
+  } catch (err: any) {
+    showCodingStatus(`Error: ${err.message || err}`, "error");
+  } finally {
+    if (solveBtnText) solveBtnText.textContent = "Solve";
+    if (solveBtn) solveBtn.disabled = false;
+  }
+});
+
+function showCodingStatus(msg: string, type: "success" | "error") {
+  if (codingStatusMsg) {
+    codingStatusMsg.className = `modal-status-msg ${type}`;
+    codingStatusMsg.textContent = msg;
+    if (!msg) codingStatusMsg.classList.add("hidden");
+    else codingStatusMsg.classList.remove("hidden");
+  }
+}
+
+// Global hotkey to open coding mode from anywhere inside the app
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c") {
+    e.preventDefault();
+    openCodingModal();
   }
 });

@@ -11,27 +11,27 @@
 <body>
   <div id="app">
     <!-- Titlebar -->
-    <div class="titlebar">
-      <div class="title-section">
-        <div class="title">InterviewBuddy</div>
-        <div id="audio-badge" class="audio-badge inactive">
-          <span class="status-dot"></span>
-          <span id="audio-status-label">Initializing...</span>
+    <div class="titlebar" data-tauri-drag-region>
+      <div class="title-section" data-tauri-drag-region>
+        <div class="title" data-tauri-drag-region>InterviewBuddy</div>
+        <div id="audio-badge" class="audio-badge inactive" data-tauri-drag-region>
+          <span class="status-dot" data-tauri-drag-region></span>
+          <span id="audio-status-label" data-tauri-drag-region>Initializing...</span>
         </div>
-        <button id="ai-settings-btn" class="ai-badge-btn" title="Configure Gemini API Key">
+        <button id="ai-settings-btn" class="ai-badge-btn">
           <span class="ai-icon">✦</span>
           <span id="ai-badge-label">Gemini AI</span>
         </button>
       </div>
 
       <div class="window-controls">
-        <button id="minimize" title="Minimize">−</button>
-        <button id="close" title="Close">×</button>
+        <button id="minimize">−</button>
+        <button id="close">×</button>
       </div>
     </div>
 
     <!-- Main Content Area -->
-    <main>
+    <main data-tauri-drag-region>
       <!-- Audio Monitor -->
       <div class="audio-monitor">
         <div class="audio-meter-container">
@@ -50,11 +50,11 @@
           <div class="transcript-toolbar">
             <span class="toolbar-title">Live Transcript</span>
             <div class="toolbar-actions">
-              <button id="copy-btn" class="tool-btn" title="Copy entire transcript">
+              <button id="copy-btn" class="tool-btn">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 <span>Copy</span>
               </button>
-              <button id="clear-btn" class="tool-btn" title="Clear transcript">
+              <button id="clear-btn" class="tool-btn">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 <span>Clear</span>
               </button>
@@ -76,12 +76,15 @@
               <span class="toolbar-title">Gemini Answers</span>
             </div>
             <div class="ai-toolbar-right">
-              <label class="auto-answer-toggle" title="Automatically answer questions detected in speech">
-                <input type="checkbox" id="auto-answer-checkbox" checked />
+              <button id="coding-mode-btn" class="tool-btn">
+                <span style="font-family: monospace; font-weight: bold;">&lt;/&gt;</span>
+              </button>
+              <label class="auto-answer-toggle">
+                <input type="checkbox" id="auto-answer-checkbox" />
                 <span class="toggle-slider"></span>
                 <span class="toggle-label">Auto-Answer</span>
               </label>
-              <button id="clear-ai-btn" class="tool-btn" title="Clear AI answers">
+              <button id="clear-ai-btn" class="tool-btn">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
               </button>
             </div>
@@ -92,6 +95,10 @@
               <span class="ai-empty-icon">✦</span>
               <p>Gemini AI is ready to detect and answer questions, quizzes, or tests from the live audio stream.</p>
             </div>
+          </div>
+          <div style="padding: 10px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; gap: 8px; background: rgba(0,0,0,0.2);">
+            <input type="text" id="manual-ai-query" placeholder="Ask Gemini manually..." style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.4); color: white; font-size: 13px; outline: none;" />
+            <button id="manual-ai-btn" class="btn-primary" style="padding: 8px 14px;">Ask</button>
           </div>
         </div>
       </div>
@@ -109,7 +116,7 @@
             <p class="modal-subtitle">Power real-time question answering with Google Gemini</p>
           </div>
         </div>
-        <button id="modal-close-btn" class="modal-close-btn" title="Close">×</button>
+        <button id="modal-close-btn" class="modal-close-btn">×</button>
       </div>
 
       <div class="modal-body">
@@ -117,7 +124,7 @@
           <label for="api-key-input">Gemini API Key</label>
           <div class="input-password-wrapper">
             <input type="password" id="api-key-input" placeholder="AIzaSy..." autocomplete="off" spellcheck="false" />
-            <button id="toggle-key-visibility" type="button" class="btn-toggle-eye" title="Show/Hide Key">👁</button>
+            <button id="toggle-key-visibility" type="button" class="btn-toggle-eye">👁</button>
           </div>
           <span class="form-hint">
             Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" id="open-ai-studio-link">Google AI Studio</a>.
@@ -127,7 +134,7 @@
         <div class="form-group">
           <div class="label-with-action">
             <label for="model-select">Model</label>
-            <button id="refresh-models-btn" type="button" class="btn-text-action" title="Fetch available models from Gemini API">⟳ Detect Models</button>
+            <button id="refresh-models-btn" type="button" class="btn-text-action">⟳ Detect Models</button>
           </div>
           <select id="model-select" disabled>
             <option value="" disabled selected>Enter your API key above to detect models...</option>
@@ -144,12 +151,83 @@
           </label>
         </div>
 
+        <div class="form-group" style="margin-top: 8px;">
+          <label for="resume-input">Your Resume / Background (Optional)</label>
+          <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+            <input type="file" id="resume-file" accept=".pdf,.txt,.md" style="font-size: 11px; flex: 1; color: #ccc;" />
+            <button id="resume-analyze-btn" class="btn-primary" style="padding: 4px 10px; font-size: 11px;">Analyze</button>
+          </div>
+          <textarea id="resume-input" rows="3" placeholder="Paste your resume here, or upload a PDF and click Analyze to let Gemini extract your persona." style="width: 100%; resize: vertical; padding: 8px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; color: #fff; font-size: 11.5px;"></textarea>
+        </div>
+
         <div id="modal-status-msg" class="modal-status-msg hidden"></div>
       </div>
 
       <div class="modal-footer">
         <button id="save-key-btn" class="btn-primary">
           <span id="save-key-btn-text">Save & Connect</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Coding Mode Modal -->
+  <div id="coding-modal" class="modal-overlay hidden">
+    <div class="modal-card" style="max-width: 650px; width: 90%;">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon" style="font-family: monospace;">&lt;/&gt;</div>
+          <div>
+            <h2 class="modal-title">DSA Coding Mode</h2>
+            <p class="modal-subtitle">Generate code-only solutions for technical interviews</p>
+          </div>
+        </div>
+        <button id="coding-modal-close-btn" class="modal-close-btn">×</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <div class="label-with-action">
+            <label for="coding-input">Problem Description</label>
+            <div style="display: flex; gap: 8px;">
+              <button id="coding-screenshot-btn" class="btn-text-action" style="background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                Take Screenshot
+              </button>
+              <select id="coding-lang-select" style="padding: 4px; border-radius: 4px; background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2);">
+                <option value="Python" selected>Python</option>
+                <option value="C++">C++</option>
+                <option value="Java">Java</option>
+                <option value="JavaScript">JavaScript</option>
+                <option value="TypeScript">TypeScript</option>
+                <option value="C">C</option>
+                <option value="Go">Go</option>
+                <option value="Rust">Rust</option>
+                <option value="Kotlin">Kotlin</option>
+                <option value="C#">C#</option>
+                <option value="SQL">SQL</option>
+              </select>
+            </div>
+          </div>
+          <div id="coding-screenshot-preview" style="display: flex; gap: 8px; margin-bottom: 8px; overflow-x: auto; padding-bottom: 4px;">
+             <!-- Images will be appended here -->
+          </div>
+          <textarea id="coding-input" rows="5" style="width: 100%; resize: vertical; padding: 10px; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;" placeholder="Paste problem description here, or select text from the transcript..."></textarea>
+        </div>
+        
+        <div id="coding-result-container" class="hidden" style="margin-top: 15px;">
+          <div class="label-with-action" style="margin-bottom: 5px;">
+            <label>Solution</label>
+            <button id="coding-copy-btn" class="btn-text-action" style="background: rgba(255,255,255,0.1); padding: 4px 8px; border-radius: 4px;">Copy Code</button>
+          </div>
+          <pre style="margin: 0;"><code id="coding-output" style="display:block; padding: 12px; background: #1e1e1e; color: #d4d4d4; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; font-family: monospace; font-size: 13px;"></code></pre>
+        </div>
+        <div id="coding-status-msg" class="modal-status-msg hidden"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="solve-btn" class="btn-primary" style="background: linear-gradient(135deg, #10b981, #059669);">
+          <span id="solve-btn-text">Solve</span>
         </button>
       </div>
     </div>

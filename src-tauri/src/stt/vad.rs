@@ -28,8 +28,8 @@ impl AudioSegmenter {
             is_speaking: false,
             last_speech_time: None,
             speech_start_time: None,
-            silence_duration: Duration::from_millis(350), // Rapid flush after 350ms silence for low latency
-            max_speech_duration: Duration::from_millis(3200), // Max 3.2s per chunk for continuous live stream
+            silence_duration: Duration::from_millis(250), // Rapid flush after 250ms silence for low latency
+            max_speech_duration: Duration::from_millis(1500), // Max 1.5s per chunk for much faster responses
             min_speech_samples: (sample_rate as usize * 3) / 10, // At least 0.3s audio
         }
     }

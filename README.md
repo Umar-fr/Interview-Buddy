@@ -5,6 +5,22 @@
 
 ---
 
+## 🚀 Important: Pushing to GitHub & 12GB Cache
+If you notice that your project folder is extremely large (e.g., 12GB+), this is completely normal! Rust caches all compiled C++ AI dependencies in `src-tauri/target/debug/deps`. 
+**This massive folder is fully ignored by Git.** 
+`.gitignore` is configured to explicitly skip `src-tauri/target/` and `node_modules`. You can safely run `git add .` and `git commit`—none of the 12GB cache will be uploaded to GitHub. 
+
+## ⚡ How to clear cache and get Instant AI Transcription Speed
+If Whisper transcription is running very slowly (taking 30+ seconds), you are running the unoptimized Debug build.
+**To get instant, blazing-fast transcription on Windows, compile the app in Release mode:**
+1. Delete your `src-tauri/target` folder if you need to free up space (optional).
+2. Open the **"x64 Native Tools Command Prompt for VS"** (search for this in the Windows Start Menu). *(This prevents the `stdbool.h` compiler crash on Windows).*
+3. `cd` into your project directory.
+4. Run the optimized build: `npm run tauri dev -- --release`
+*(Running with `--release` enables Rust optimizations, shrinking response time from 30 seconds to less than 1 second!)*
+
+---
+
 ## 🌟 Overview
 
 **InterviewBuddy** is a lightweight, low-latency desktop assistant designed to listen to live system audio (interviews, lectures, Zoom/Teams/Meet calls, quizzes, or media playback), transcribe the spoken audio in real-time on-device, and provide instant AI-generated answers, explanations, and context-aware insights.
@@ -90,20 +106,29 @@ interview-buddy/
 
 Before running or developing the project, ensure you have the following installed:
 
-1. **macOS**: macOS 13.0 (Ventura) or later *(macOS 14+ recommended for ScreenCaptureKit audio APIs)*.
-2. **Node.js**: `v18.0.0` or later (LTS recommended).
-3. **Rust Toolchain**: Rust 1.77+ with `cargo`:
+### General
+1. **Node.js**: `v18.0.0` or later (LTS recommended).
+2. **Rust Toolchain**: Rust 1.77+ with `cargo`:
    ```bash
+   # On macOS/Linux
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
-4. **Xcode Command Line Tools**:
-   ```bash
-   xcode-select --install
-   ```
-5. **CMake**: Required for compiling `whisper.cpp`:
-   ```bash
-   brew install cmake
-   ```
+   *(On Windows, download `rustup-init.exe` from [rustup.rs](https://rustup.rs/))*
+
+### macOS Requirements
+1. **macOS 13.0+** *(Ventura or later)* for Apple `ScreenCaptureKit` audio APIs.
+2. **Xcode Command Line Tools**: `xcode-select --install`
+3. **CMake**: `brew install cmake`
+
+### Windows Requirements (Windows 10/11)
+1. **Visual Studio Build Tools**: 
+   - Download the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+   - Install the **"Desktop development with C++"** workload (ensure the "Windows 10/11 SDK" optional component is checked).
+2. **LLVM (libclang)**: Required by `bindgen` to compile the `whisper.cpp` bindings.
+   - Download from [llvm.org](https://releases.llvm.org/download.html) (or use `winget install -e --id LLVM.LLVM`).
+   - **Crucial:** Select "Add LLVM to the system PATH" during installation.
+3. **CMake**: Install via installer from [cmake.org](https://cmake.org/download/) (or `winget install CMake`).
+4. **WebView2**: Windows 11 includes this by default, but Windows 10 users may need to install the [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
 ---
 
@@ -120,16 +145,19 @@ cd interview-buddy
 npm install
 ```
 
-### 2. Grant macOS Permissions
+### 2. OS-Specific Setup & Permissions
 
+#### macOS (ScreenCaptureKit)
 Because InterviewBuddy captures system audio using Apple's `ScreenCaptureKit`, macOS requires **Screen & System Audio Recording** permission:
-
 1. On first launch, macOS will prompt you to grant screen recording permissions.
-2. If not prompted, go to:
-   **System Settings** ➔ **Privacy & Security** ➔ **Screen & System Audio Recording**
-3. Ensure your terminal or **InterviewBuddy** is toggled **ON**.
+2. If not prompted, go to **System Settings** ➔ **Privacy & Security** ➔ **Screen & System Audio Recording** and toggle **InterviewBuddy** (or your Terminal) **ON**.
 
 *(Note: InterviewBuddy only captures system audio streams; it does not record video).*
+
+#### Windows (WASAPI Loopback)
+Windows utilizes CPAL with WASAPI loopback capture natively. 
+- No special system permission prompts are required to capture output device audio. 
+- **Build Note:** If your first `npm run tauri dev` fails with a `libclang` or `stdbool.h` error, ensure you have correctly installed **LLVM**, **CMake**, and the **Visual Studio C++ Build Tools**, and that you have restarted your terminal to load the updated PATH.
 
 ---
 
@@ -168,8 +196,15 @@ What happens on startup:
 - **Copy Transcript**: Click **Copy** in the toolbar to copy the entire timestamped conversation transcript to your clipboard.
 
 ### 4. Stealth & Overlay Features
+- **Boss Key (Panic Button)**: Press **`Ctrl + Shift + H`** at any time to instantly hide the entire app UI (and mute it) without stopping the background capture. Press it again to reveal the UI.
+- **Screen Share Protection**: The window uses native APIs (`NSWindowSharingNone` on macOS, `WDA_EXCLUDEFROMCAPTURE` on Windows) to remain completely invisible to screen capture tools, meeting recordings, and screen sharing sessions.
+- **Process & Taskbar Hiding**: The app hides itself from the Windows taskbar and Alt-Tab switcher to evade basic monitoring.
 - **Drag Anywhere**: Click and drag any background area of the window to reposition it.
-- **Screen Share Protection**: The window uses `setSharingType: 0` (`NSWindowSharingNone`), making it invisible to screen capture tools, meeting recordings, and screen sharing sessions.
+
+### 5. DSA Coding Mode
+- Press **`Ctrl + Shift + C`** or click the **`</>`** button in the AI toolbar to open Coding Mode.
+- Select your target language (Python, C++, Java, etc.), paste the problem description, and get a pure code block solution instantly.
+- Keeps answers strict, idiomatic, and free of unnecessary prose or explanations.
 
 ---
 
