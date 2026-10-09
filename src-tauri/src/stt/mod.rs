@@ -7,8 +7,11 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
 
-const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
-const MODEL_FILE_NAME: &str = "ggml-base.en.bin";
+const MODEL_TINY_EN_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
+const MODEL_TINY_EN_NAME: &str = "ggml-tiny.en.bin";
+
+const MODEL_BASE_EN_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
+const MODEL_BASE_EN_NAME: &str = "ggml-base.en.bin";
 
 pub struct WhisperEngine {
     _ctx: WhisperContext,
@@ -81,11 +84,40 @@ impl WhisperEngine {
     }
 }
 
-/// Ensure Whisper model is available locally, downloading it if not present
-pub fn ensure_model_available<F>(progress_callback: F) -> Result<PathBuf, String>
+/// Ensure Whisper model is available locally, checking bundled resources or downloading if not present.
+pub fn ensure_model_available<F>(model_choice: Option<&str>, progress_callback: F) -> Result<PathBuf, String>
 where
     F: Fn(&str),
 {
+    let use_tiny = match model_choice {
+        Some(m) => m.contains("tiny"),
+        None => cfg!(target_os = "windows"), // Default to tiny on Windows for instant CPU speed
+    };
+
+    let (model_file_name, download_url, approx_size) = if use_tiny {
+        (MODEL_TINY_EN_NAME, MODEL_TINY_EN_URL, "~75MB")
+    } else {
+        (MODEL_BASE_EN_NAME, MODEL_BASE_EN_URL, "~140MB")
+    };
+
+    // 1. Check bundled application resources first (for pre-packaged distributions)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let candidates = [
+                exe_dir.join("resources").join(model_file_name),
+                exe_dir.join("../Resources").join(model_file_name),
+                exe_dir.join("models").join(model_file_name),
+                exe_dir.join(model_file_name),
+            ];
+            for candidate in candidates {
+                if candidate.exists() {
+                    progress_callback(&format!("Loaded pre-bundled Whisper model: {}", model_file_name));
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+
     let base_dir = dirs::data_local_dir()
         .or_else(dirs::cache_dir)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -93,11 +125,11 @@ where
     let model_dir = base_dir.join("interview-buddy").join("models");
     fs::create_dir_all(&model_dir).map_err(|e| format!("Failed to create model directory: {}", e))?;
 
-    let model_path = model_dir.join(MODEL_FILE_NAME);
+    let model_path = model_dir.join(model_file_name);
 
-    // If model does not exist in new dir, check if legacy system-transcriber directory has it
+    // Check if legacy system-transcriber directory has it
     if !model_path.exists() {
-        let legacy_model = base_dir.join("system-transcriber").join("models").join(MODEL_FILE_NAME);
+        let legacy_model = base_dir.join("system-transcriber").join("models").join(model_file_name);
         if legacy_model.exists() {
             let _ = fs::copy(&legacy_model, &model_path);
         }
@@ -106,15 +138,15 @@ where
     if model_path.exists() {
         if let Ok(metadata) = fs::metadata(&model_path) {
             if metadata.len() > 10_000_000 {
-                progress_callback("Whisper model loaded from local cache");
+                progress_callback(&format!("Whisper model loaded from local cache: {}", model_file_name));
                 return Ok(model_path);
             }
         }
     }
 
-    progress_callback("Downloading Whisper base.en model (~140MB)...");
+    progress_callback(&format!("Downloading Whisper {} model ({})...", model_file_name, approx_size));
 
-    let response = reqwest::blocking::get(MODEL_DOWNLOAD_URL)
+    let response = reqwest::blocking::get(download_url)
         .map_err(|e| format!("Failed to request Whisper model: {}", e))?;
 
     if !response.status().is_success() {
@@ -124,7 +156,7 @@ where
         ));
     }
 
-    let temp_path = model_dir.join(format!("{}.tmp", MODEL_FILE_NAME));
+    let temp_path = model_dir.join(format!("{}.tmp", model_file_name));
     let mut temp_file = File::create(&temp_path)
         .map_err(|e| format!("Failed to create temp model file: {}", e))?;
 
@@ -135,6 +167,6 @@ where
     fs::rename(&temp_path, &model_path)
         .map_err(|e| format!("Failed to finalize model file: {}", e))?;
 
-    progress_callback("Whisper model downloaded successfully");
+    progress_callback(&format!("Whisper {} model downloaded successfully", model_file_name));
     Ok(model_path)
 }

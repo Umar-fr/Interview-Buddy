@@ -71,16 +71,29 @@ const manualAiBtn = document.getElementById("manual-ai-btn") as HTMLButtonElemen
 const refreshModelsBtn = document.getElementById("refresh-models-btn") as HTMLButtonElement | null;
 const modelDetectHint = document.getElementById("model-detect-hint");
 const rememberKeyCheckbox = document.getElementById("remember-key-checkbox") as HTMLInputElement | null;
+const whisperModelSelect = document.getElementById("whisper-model-select") as HTMLSelectElement | null;
 
 // ==========================================
 // Gemini AI State & Storage
 // ==========================================
 const STORAGE_KEY_API_KEY = "gemini_api_key";
 const STORAGE_KEY_MODEL = "gemini_model";
+const STORAGE_KEY_WHISPER_MODEL = "whisper_model";
 
 let geminiApiKey: string = localStorage.getItem(STORAGE_KEY_API_KEY) || "";
 let selectedModel: string = localStorage.getItem(STORAGE_KEY_MODEL) || "";
+let selectedWhisperModel: string = localStorage.getItem(STORAGE_KEY_WHISPER_MODEL) || "";
 let userResume: string = localStorage.getItem("userResume") || "";
+
+if (whisperModelSelect) {
+  if (selectedWhisperModel) {
+    whisperModelSelect.value = selectedWhisperModel;
+  }
+  whisperModelSelect.addEventListener("change", () => {
+    selectedWhisperModel = whisperModelSelect.value;
+    localStorage.setItem(STORAGE_KEY_WHISPER_MODEL, selectedWhisperModel);
+  });
+}
 
 if (resumeInput) {
   resumeInput.value = userResume;
@@ -437,6 +450,11 @@ saveKeyBtn?.addEventListener("click", async () => {
         localStorage.removeItem(STORAGE_KEY_MODEL);
       }
 
+      if (whisperModelSelect?.value) {
+        selectedWhisperModel = whisperModelSelect.value;
+        localStorage.setItem(STORAGE_KEY_WHISPER_MODEL, selectedWhisperModel);
+      }
+
       updateAiBadgeState();
       const rememberMsg = rememberKeyCheckbox?.checked ? " (saved on device)" : " (session only)";
       showModalStatus(`✓ Connected successfully to ${chosenModel}${rememberMsg}!`, "success");
@@ -474,7 +492,9 @@ window.addEventListener("DOMContentLoaded", () => {
   // Start background processes after UI is ready to catch status events
   setTimeout(async () => {
     try {
-      await invoke("start_system_audio_capture");
+      await invoke("start_system_audio_capture", {
+        modelName: selectedWhisperModel || undefined,
+      });
     } catch (e) {
       console.error("Failed to start audio capture:", e);
     }
@@ -532,7 +552,11 @@ async function testGeminiApiKey(key: string, model: string): Promise<{ ok: boole
   }
 }
 
-async function requestGeminiAnswer(questionText: string, contextHistory: string): Promise<string> {
+async function streamGeminiAnswer(
+  questionText: string,
+  contextHistory: string,
+  onChunk: (accumulatedHtml: string) => void
+): Promise<string> {
   if (!geminiApiKey) {
     throw new Error("No Gemini API Key configured. Click '✦ Set API Key' to configure.");
   }
@@ -543,10 +567,9 @@ async function requestGeminiAnswer(questionText: string, contextHistory: string)
   }
 
   const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel}`;
-  const url = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:generateContent?key=${geminiApiKey}`;
+  const streamUrl = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:streamGenerateContent?alt=sse&key=${geminiApiKey}`;
 
   const promptContext = userResume ? `\nMy Background/Resume for context:\n${userResume}\n` : "";
-  
   const prompt = `You are me. I am currently in a live technical interview. I will provide you with the transcript of what the interviewer is saying.
 ${promptContext}
 Analyze the live interview transcript and provide a response that I can read out loud to the interviewer.
@@ -568,16 +591,83 @@ Instructions:
 4. Keep the tone professional, confident, and conversational.
 5. If it's a multiple choice question being read aloud, identify the correct answer explicitly in a conversational way.`;
 
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      maxOutputTokens: 250,
+      temperature: 0.2,
+    },
+  };
+
+  try {
+    const response = await fetch(streamUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok || !response.body) {
+      return await requestGeminiAnswerFallback(cleanModel, payload);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let accumulatedText = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data: ")) {
+          try {
+            const jsonStr = trimmed.slice(6).trim();
+            if (jsonStr === "[DONE]") continue;
+            const data = JSON.parse(jsonStr);
+            const chunkText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (chunkText) {
+              accumulatedText += chunkText;
+              onChunk(formatAiAnswerHtml(accumulatedText));
+            }
+          } catch {
+            // Buffer fragment, continue
+          }
+        }
+      }
+    }
+
+    if (buffer.trim().startsWith("data: ")) {
+      try {
+        const data = JSON.parse(buffer.trim().slice(6).trim());
+        const chunkText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (chunkText) {
+          accumulatedText += chunkText;
+          onChunk(formatAiAnswerHtml(accumulatedText));
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    return accumulatedText ? formatAiAnswerHtml(accumulatedText) : "No answer generated.";
+  } catch (streamErr) {
+    console.warn("Streaming SSE failed, falling back to standard generateContent", streamErr);
+    return await requestGeminiAnswerFallback(cleanModel, payload);
+  }
+}
+
+async function requestGeminiAnswerFallback(cleanModel: string, payload: any): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:generateContent?key=${geminiApiKey}`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        maxOutputTokens: 250,
-        temperature: 0.2,
-      },
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -694,11 +784,15 @@ function triggerAiQuestionAnswer(questionText: string, isManual = false) {
     .map((item) => `[${item.timestamp}] ${item.text}`)
     .join("\n");
 
-  // Call Gemini
-  requestGeminiAnswer(questionText, recentContext)
-    .then((answerHtml) => {
+  // Stream response from Gemini
+  streamGeminiAnswer(questionText, recentContext, (partialHtml) => {
+    card.classList.remove("loading");
+    cardAnswer.innerHTML = partialHtml;
+    if (aiAnswersBox) aiAnswersBox.scrollTop = aiAnswersBox.scrollHeight;
+  })
+    .then((finalHtml) => {
       card.classList.remove("loading");
-      cardAnswer.innerHTML = answerHtml;
+      cardAnswer.innerHTML = finalHtml;
       if (aiAnswersBox) aiAnswersBox.scrollTop = aiAnswersBox.scrollHeight;
     })
     .catch((err) => {
@@ -940,8 +1034,6 @@ const codingCopyBtn = document.getElementById("coding-copy-btn");
 const codingStatusMsg = document.getElementById("coding-status-msg");
 const codingScreenshotBtn = document.getElementById("coding-screenshot-btn") as HTMLButtonElement | null;
 const codingScreenshotPreview = document.getElementById("coding-screenshot-preview");
-const codingScreenshotImg = document.getElementById("coding-screenshot-img") as HTMLImageElement | null;
-const codingScreenshotRemove = document.getElementById("coding-screenshot-remove");
 let currentScreenshots: string[] = [];
 
 const STORAGE_KEY_LANG = "coding_language";
@@ -1198,4 +1290,9 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openCodingModal();
   }
+});
+
+// OS-level global shortcut listener from Tauri backend
+listen("open-coding-modal", () => {
+  openCodingModal();
 });

@@ -144,6 +144,17 @@
           </span>
         </div>
 
+        <div class="form-group" style="margin-top: 6px;">
+          <label for="whisper-model-select">Offline Speech-to-Text Model (Whisper)</label>
+          <select id="whisper-model-select" style="width: 100%; padding: 7px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: #fff; font-size: 12px; outline: none;">
+            <option value="tiny.en">Tiny.en (~75MB) - Blazing Fast, Low Latency (Best for Windows/CPU)</option>
+            <option value="base.en">Base.en (~140MB) - High Accuracy (Recommended for Apple Silicon)</option>
+          </select>
+          <span class="form-hint">
+            Runs 100% offline on your device with no audio sent over the internet.
+          </span>
+        </div>
+
         <div class="form-group-checkbox">
           <label class="remember-key-label" for="remember-key-checkbox">
             <input type="checkbox" id="remember-key-checkbox" />

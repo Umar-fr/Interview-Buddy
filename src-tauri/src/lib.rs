@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
+#[allow(deprecated)]
 use cocoa::base::id;
 
 #[cfg(target_os = "macos")]
@@ -34,6 +35,7 @@ pub struct TranscriptSegmentEvent {
 
 #[cfg(target_os = "macos")]
 fn configure_macos_window(window: &WebviewWindow) {
+    #[allow(deprecated)]
     let ns_window = window
         .ns_window()
         .expect("Failed to get NSWindow") as id;
@@ -93,7 +95,11 @@ impl Default for AppAudioState {
 }
 
 #[tauri::command]
-fn start_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) -> Result<String, String> {
+fn start_system_audio_capture(
+    app: AppHandle,
+    state: State<'_, AppAudioState>,
+    model_name: Option<String>,
+) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     let (data_rx, status_rx) = {
         let mut session_guard = state.session_mac.lock().map_err(|e| e.to_string())?;
@@ -128,6 +134,7 @@ fn start_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) -
 
     // Spawn audio processor and transcription background thread
     thread::spawn(move || {
+        let mut resampler = audio::AudioResampler::new(16000, 16000);
         let mut segmenter = stt::vad::AudioSegmenter::new(16000);
         let mut last_level_emit = Instant::now();
         let emit_interval = Duration::from_millis(50);
@@ -142,7 +149,8 @@ fn start_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) -
         );
 
         let app_handle_download = app_handle.clone();
-        let model_path = match stt::ensure_model_available(move |msg| {
+        let model_choice = model_name.as_deref();
+        let model_path = match stt::ensure_model_available(model_choice, move |msg| {
             println!("[Whisper Model]: {}", msg);
             let _ = app_handle_download.emit(
                 "model-status",
@@ -208,8 +216,11 @@ fn start_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) -
 
             // Receive audio sample chunks
             if let Ok(chunk) = data_rx.recv_timeout(Duration::from_millis(100)) {
-                let rms = audio::calculate_rms(&chunk.samples);
-                let peak = audio::calculate_peak(&chunk.samples);
+                // Ensure audio is strictly 16kHz mono via resampler
+                let samples_16k = resampler.process(&chunk.samples, chunk.sample_rate);
+
+                let rms = audio::calculate_rms(&samples_16k);
+                let peak = audio::calculate_peak(&samples_16k);
 
                 // Emit audio metering events for UI visualizer
                 if last_level_emit.elapsed() >= emit_interval {
@@ -221,7 +232,7 @@ fn start_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) -
                 }
 
                 // Process audio with Voice Activity Detection (VAD)
-                if let Some(segment) = segmenter.process_samples(&chunk.samples) {
+                if let Some(segment) = segmenter.process_samples(&samples_16k) {
                     if let Some(ref mut engine) = whisper_engine {
                         match engine.transcribe(&segment.samples) {
                             Ok(text) => {
@@ -313,10 +324,44 @@ fn minimize_app(window: WebviewWindow) {
 }
 
 #[tauri::command]
-fn take_screenshot() -> Result<String, String> {
+fn take_screenshot(app: AppHandle) -> Result<String, String> {
     let screens = screenshots::Screen::all().map_err(|e| format!("Failed to get screens: {}", e))?;
-    let screen = screens.first().ok_or("No screens found")?;
-    let image = screen.capture().map_err(|e| format!("Failed to capture: {}", e))?;
+    if screens.is_empty() {
+        return Err("No screens found".to_string());
+    }
+
+    // Capture the monitor where the window is currently located, or fallback to primary monitor
+    let target_screen = if let Some(win) = app.get_webview_window("main") {
+        if let Ok(pos) = win.outer_position() {
+            screens
+                .iter()
+                .find(|s| {
+                    let info = &s.display_info;
+                    pos.x >= info.x
+                        && pos.x < (info.x + info.width as i32)
+                        && pos.y >= info.y
+                        && pos.y < (info.y + info.height as i32)
+                })
+                .unwrap_or_else(|| {
+                    screens
+                        .iter()
+                        .find(|s| s.display_info.is_primary)
+                        .unwrap_or(&screens[0])
+                })
+        } else {
+            screens
+                .iter()
+                .find(|s| s.display_info.is_primary)
+                .unwrap_or(&screens[0])
+        }
+    } else {
+        screens
+            .iter()
+            .find(|s| s.display_info.is_primary)
+            .unwrap_or(&screens[0])
+    };
+
+    let image = target_screen.capture().map_err(|e| format!("Failed to capture: {}", e))?;
     
     let mut cursor = std::io::Cursor::new(Vec::new());
     image.write_to(&mut cursor, screenshots::image::ImageFormat::Png).map_err(|e| format!("Failed to encode png: {}", e))?;
@@ -334,7 +379,14 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        if shortcut.matches(Modifiers::ALT, Code::KeyR) {
+                        let is_boss_key = shortcut.matches(Modifiers::ALT, Code::KeyR)
+                            || shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyH)
+                            || shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyH);
+
+                        let is_coding_key = shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyC)
+                            || shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::KeyC);
+
+                        if is_boss_key {
                             if let Some(win) = app.get_webview_window("main") {
                                 if win.is_visible().unwrap_or(true) {
                                     let _ = win.hide();
@@ -342,6 +394,12 @@ pub fn run() {
                                     let _ = win.show();
                                     let _ = win.set_focus();
                                 }
+                            }
+                        } else if is_coding_key {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                                let _ = app.emit("open-coding-modal", ());
                             }
                         }
                     }
@@ -367,8 +425,18 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             configure_windows_window(&window);
 
-            let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyR);
-            let _ = app.handle().global_shortcut().register(shortcut);
+            // Register global shortcuts: Boss keys and Coding mode
+            let shortcuts = [
+                Shortcut::new(Some(Modifiers::ALT), Code::KeyR),
+                Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyH),
+                Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyH),
+                Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyC),
+                Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyC),
+            ];
+
+            for s in shortcuts {
+                let _ = app.handle().global_shortcut().register(s);
+            }
 
             Ok(())
         })
