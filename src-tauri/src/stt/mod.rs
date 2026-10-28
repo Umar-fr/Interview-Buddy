@@ -13,13 +13,23 @@ const MODEL_TINY_EN_NAME: &str = "ggml-tiny.en.bin";
 const MODEL_BASE_EN_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
 const MODEL_BASE_EN_NAME: &str = "ggml-base.en.bin";
 
-pub struct WhisperEngine {
-    _ctx: WhisperContext,
-    state: WhisperState,
+fn sanitize_samples(samples: &[f32]) -> Vec<f32> {
+    samples
+        .iter()
+        .map(|sample| {
+            if sample.is_finite() {
+                sample.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
-// WhisperEngine is safe to send to background worker threads
-unsafe impl Send for WhisperEngine {}
+pub struct WhisperEngine {
+    state: WhisperState,
+    _ctx: WhisperContext,
+}
 
 impl WhisperEngine {
     /// Initialize Whisper context and persistent state from the model path
@@ -29,7 +39,7 @@ impl WhisperEngine {
             .ok_or_else(|| "Invalid model path unicode".to_string())?;
 
         let mut params = WhisperContextParameters::default();
-        params.use_gpu(true);
+        params.use_gpu(cfg!(target_os = "macos"));
 
         let ctx = WhisperContext::new_with_params(path_str, params)
             .map_err(|e| format!("Failed to load Whisper model: {:?}", e))?;
@@ -38,7 +48,7 @@ impl WhisperEngine {
             .create_state()
             .map_err(|e| format!("Failed to create persistent Whisper state: {:?}", e))?;
 
-        Ok(Self { _ctx: ctx, state })
+        Ok(Self { state, _ctx: ctx })
     }
 
     /// Transcribe 16kHz mono PCM float samples rapidly
@@ -55,8 +65,8 @@ impl WhisperEngine {
         params.set_suppress_blank(true);
 
         let n_threads = std::thread::available_parallelism()
-            .map(|p| (p.get() as i32).clamp(2, 8))
-            .unwrap_or(4);
+            .map(|p| (p.get() as i32).clamp(1, 4))
+            .unwrap_or(2);
         params.set_n_threads(n_threads);
 
         // Anti-hallucination filters
@@ -65,7 +75,7 @@ impl WhisperEngine {
         params.set_no_speech_thold(0.6);
 
         self.state
-            .full(params, samples)
+            .full(params, &sanitize_samples(samples))
             .map_err(|e| format!("Whisper inference error: {:?}", e))?;
 
         let num_segments = self
@@ -170,4 +180,19 @@ where
 
     progress_callback(&format!("Whisper {} model downloaded successfully", model_file_name));
     Ok(model_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_samples;
+
+    #[test]
+    fn sanitizes_non_finite_and_out_of_range_audio() {
+        let samples = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.5, 0.5, 1.5];
+
+        assert_eq!(
+            sanitize_samples(&samples),
+            vec![0.0, 0.0, 0.0, -1.0, 0.5, 1.0]
+        );
+    }
 }
