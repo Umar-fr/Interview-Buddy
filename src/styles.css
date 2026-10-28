@@ -547,14 +547,19 @@ main {
 
 .ai-card-answer {
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: #f3f4f6;
-  font-weight: 500;
+  font-weight: 450;
 }
 
 .ai-card-answer strong {
   color: #34d399;
   font-weight: 700;
+}
+
+.ai-card-answer em {
+  color: #c084fc;
+  font-style: normal;
 }
 
 .ai-choice-badge {
@@ -566,6 +571,64 @@ main {
   padding: 1px 6px;
   border-radius: 4px;
   margin-right: 4px;
+}
+
+/* Manual AI Query Bar */
+.manual-ai-container {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  align-items: center;
+}
+
+.manual-ai-input {
+  flex: 1;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+  color: #ffffff;
+  font-size: 12.5px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.manual-ai-input:focus {
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.2);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.manual-ai-input::placeholder {
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 12px;
+}
+
+.manual-ai-input::-webkit-search-cancel-button,
+.manual-ai-input::-webkit-search-decoration,
+.manual-ai-input::-webkit-search-results-button,
+.manual-ai-input::-webkit-search-results-decoration {
+  display: none;
+}
+
+.manual-ai-btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.manual-ai-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
 }
 
 /* Modal Dialog */

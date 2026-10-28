@@ -374,6 +374,15 @@ fn take_screenshot(app: AppHandle) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    {
+        // Disable WebView2 autofill and spellcheck suggestions that can trigger OS-level candidate popups during screen sharing
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AutofillServerCommunication --disable-autofill --disable-spell-checking",
+        );
+    }
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()

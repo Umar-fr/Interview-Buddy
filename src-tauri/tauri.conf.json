@@ -28,18 +28,41 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://generativelanguage.googleapis.com https://huggingface.co"
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "Interview Buddy",
+    "copyright": "Copyright © 2024 Interview Buddy",
+    "category": "Productivity",
+    "shortDescription": "AI-powered real-time interview assistant",
+    "longDescription": "Interview Buddy is a real-time AI interview copilot with offline speech-to-text, screen capture, and intelligent answer generation powered by Gemini AI.",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installMode": "currentUser",
+        "languages": ["English"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.3",
+      "frameworks": [],
+      "signingIdentity": null
+    }
   }
 }

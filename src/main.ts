@@ -569,33 +569,41 @@ async function streamGeminiAnswer(
   const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel}`;
   const streamUrl = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:streamGenerateContent?alt=sse&key=${geminiApiKey}`;
 
-  const promptContext = userResume ? `\nMy Background/Resume for context:\n${userResume}\n` : "";
-  const prompt = `You are me. I am currently in a live technical interview. I will provide you with the transcript of what the interviewer is saying.
+  const promptContext = userResume ? `\nMy Background / Resume (Internalize this as MY actual background and experience):\n${userResume}\n` : "";
+  const prompt = `You are me. I am currently in a live job interview. You are generating the exact words I will speak out loud to the interviewer.
 ${promptContext}
-Analyze the live interview transcript and provide a response that I can read out loud to the interviewer.
-
-Context of recent speech:
-"""
-${contextHistory}
-"""
-
-Current question / problem prompt:
+Interviewer's Question / Prompt:
 """
 ${questionText}
 """
 
-Instructions:
-1. Speak in the first person ("I", "my") as if you are me answering the question naturally.
-2. Provide a detailed, highly accurate, and comprehensive answer that flows like natural human speech.
-3. If they ask a direct technical question, explain the reasoning clearly and deeply so I sound knowledgeable.
-4. Keep the tone professional, confident, and conversational.
-5. If it's a multiple choice question being read aloud, identify the correct answer explicitly in a conversational way.`;
+Recent Conversation Context:
+"""
+${contextHistory}
+"""
+
+CRITICAL INSTRUCTIONS FOR SPOKEN DELIVERY:
+1. Spoken First-Person Voice: Speak strictly in the first person ("I", "my", "we"). Never refer to me as a third person or as a candidate. If my background/resume is provided, ground all stories, tools, and technical choices in my real projects and experience. If details are not in the resume, invent authentic, highly credible details consistent with a senior professional in this field.
+2. Complete, Concise & Cohesive: Deliver a fully completed response from start to finish. Never stop mid-thought or cut off early. Keep it clear, concise, and structured so it can be spoken in 60 to 90 seconds without wandering.
+3. Read-Aloud Ready: Write ONLY what I should say aloud. Absolutely NO introductory filler (NEVER say "Here is a concise answer:", "Certainly!", "That's a great question", "As an AI"). Start directly with the first spoken word.
+4. Behavioral & Situational Questions (STAR Method):
+   - Whenever asked a behavioral, situational, or HR question (e.g., "Tell me about a time...", "Describe a difficult challenge you overcame", "How do you handle conflict or tight deadlines?", "Why should we hire you?"):
+   - Structure the response naturally using the STAR Schema (Situation, Task, Action, Result) in conversational prose:
+     • Situation & Task: Briefly set the context, team environment, and the specific goal/problem I faced.
+     • Action: Clearly state what I personally did, tools/frameworks I utilized, and how I collaborated or led.
+     • Result: Conclude with a clear, measurable positive impact (e.g. reduced latency by 35%, eliminated data inconsistencies, saved $40k cloud cost, delivered ahead of schedule).
+5. Technical, Architecture & Process Questions:
+   - When asked for steps, processes, or technical concepts (e.g., "steps to perform machine learning and create a model", "how does Kafka partition work?", "DBT models vs views"):
+   - Provide a complete, logical step-by-step breakdown using smooth conversational transitions (e.g., "To build a machine learning model end-to-end, I follow five core phases. First, problem framing and exploratory data analysis... Second, data preprocessing and feature engineering... Third, baseline modeling and algorithm selection... Fourth, cross-validation and hyperparameter tuning... And finally, deployment, CI/CD, and drift monitoring.").
+   - Ensure EVERY step is completed and wrapped up cleanly so I have a complete roadmap to read aloud.
+6. Multiple-Choice / Quick Queries:
+   - State the correct answer clearly and conversationally in the opening sentence, followed by a crisp 1-2 sentence spoken explanation.`;
 
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
-      maxOutputTokens: 250,
-      temperature: 0.2,
+      maxOutputTokens: 1200,
+      temperature: 0.3,
     },
   };
 
@@ -682,11 +690,20 @@ async function requestGeminiAnswerFallback(cleanModel: string, payload: any): Pr
 
 
 function formatAiAnswerHtml(raw: string): string {
-  // Convert markdown bold to strong and cleanup
-  return raw
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/g, "<em>$1</em>")
-    .replace(/\n/g, "<br/>");
+  // Convert markdown code ticks `code`
+  let html = raw.replace(/`([^`]+)`/g, "<code style=\"background:rgba(255,255,255,0.1); padding:2px 5px; border-radius:4px; font-family:monospace; font-size:12px;\">$1</code>");
+  // Convert markdown bold **text**
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Convert markdown italics *text*
+  html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  // Convert markdown bullet points at line starts
+  html = html.replace(/^[•\-\*]\s+(.+)$/gm, "<div style=\"padding-left:14px; position:relative; margin:3px 0;\"><span style=\"position:absolute; left:2px; color:#c084fc;\">•</span>$1</div>");
+  // Convert numbered lists at line starts (e.g. "1. ")
+  html = html.replace(/^(\d+)\.\s+(.+)$/gm, "<div style=\"padding-left:18px; position:relative; margin:4px 0;\"><span style=\"position:absolute; left:0; font-weight:600; color:#34d399;\">$1.</span>$2</div>");
+  // Spacing for paragraphs
+  html = html.replace(/\n{2,}/g, "<div style=\"height:8px;\"></div>");
+  html = html.replace(/\n/g, "<br/>");
+  return html;
 }
 
 // ==========================================
@@ -752,14 +769,37 @@ function triggerAiQuestionAnswer(questionText: string, isManual = false) {
 
   const cardTitle = document.createElement("div");
   cardTitle.className = "ai-card-title";
-  cardTitle.innerHTML = `<span class="ai-sparkle">✦</span> Gemini Copilot`;
+  cardTitle.innerHTML = `<span class="ai-sparkle">✦</span> ${isManual ? "Manual Query Answer" : "Gemini Copilot"}`;
+
+  const cardHeaderRight = document.createElement("div");
+  cardHeaderRight.style.display = "flex";
+  cardHeaderRight.style.alignItems = "center";
+  cardHeaderRight.style.gap = "6px";
+
+  const copyCardBtn = document.createElement("button");
+  copyCardBtn.className = "tool-btn";
+  copyCardBtn.style.fontSize = "9.5px";
+  copyCardBtn.style.padding = "1px 5px";
+  copyCardBtn.innerHTML = `<span>Copy</span>`;
+  copyCardBtn.title = "Copy spoken response";
+  copyCardBtn.onclick = async (e) => {
+    e.stopPropagation();
+    const textToCopy = cardAnswer.innerText || cardAnswer.textContent || "";
+    await navigator.clipboard.writeText(textToCopy);
+    const span = copyCardBtn.querySelector("span");
+    if (span) span.textContent = "Copied!";
+    setTimeout(() => { if (span) span.textContent = "Copy"; }, 1500);
+  };
 
   const cardTime = document.createElement("span");
   cardTime.className = "ai-card-time";
   cardTime.textContent = timestamp;
 
+  cardHeaderRight.appendChild(copyCardBtn);
+  cardHeaderRight.appendChild(cardTime);
+
   cardHeader.appendChild(cardTitle);
-  cardHeader.appendChild(cardTime);
+  cardHeader.appendChild(cardHeaderRight);
 
   const cardQuestion = document.createElement("div");
   cardQuestion.className = "ai-card-question";
@@ -822,6 +862,16 @@ clearAiBtn?.addEventListener("click", () => {
 });
 
 // Manual AI Query
+if (manualAiQuery) {
+  manualAiQuery.setAttribute("autocomplete", "off");
+  manualAiQuery.setAttribute("autocorrect", "off");
+  manualAiQuery.setAttribute("autocapitalize", "off");
+  manualAiQuery.setAttribute("spellcheck", "false");
+  manualAiQuery.setAttribute("data-form-type", "other");
+  manualAiQuery.setAttribute("data-lpignore", "true");
+  manualAiQuery.setAttribute("aria-autocomplete", "none");
+}
+
 function handleManualQuery() {
   const query = manualAiQuery?.value.trim();
   if (query) {
@@ -832,7 +882,20 @@ function handleManualQuery() {
 
 manualAiBtn?.addEventListener("click", handleManualQuery);
 manualAiQuery?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") handleManualQuery();
+  if (e.key === "Enter") {
+    e.preventDefault();
+    handleManualQuery();
+  } else if (e.key === "Escape") {
+    manualAiQuery.blur();
+  }
+});
+
+// Quick shortcut: press '/' to focus manual query when not typing in another input
+window.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+    e.preventDefault();
+    manualAiQuery?.focus();
+  }
 });
 
 // ==========================================

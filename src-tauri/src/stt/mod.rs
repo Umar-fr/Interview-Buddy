@@ -1,7 +1,7 @@
 pub mod vad;
 
 use std::fs::{self, File};
-use std::io::{copy, BufReader};
+use std::io::copy;
 use std::path::{Path, PathBuf};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
@@ -146,10 +146,11 @@ where
 
     progress_callback(&format!("Downloading Whisper {} model ({})...", model_file_name, approx_size));
 
-    let response = reqwest::blocking::get(download_url)
+    let response = ureq::get(download_url)
+        .call()
         .map_err(|e| format!("Failed to request Whisper model: {}", e))?;
 
-    if !response.status().is_success() {
+    if response.status() != 200 {
         return Err(format!(
             "Failed to download model: HTTP {}",
             response.status()
@@ -160,7 +161,7 @@ where
     let mut temp_file = File::create(&temp_path)
         .map_err(|e| format!("Failed to create temp model file: {}", e))?;
 
-    let mut reader = BufReader::new(response);
+    let mut reader = response.into_reader();
     copy(&mut reader, &mut temp_file)
         .map_err(|e| format!("Failed to write model file: {}", e))?;
 

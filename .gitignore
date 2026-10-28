@@ -25,4 +25,21 @@ dist-ssr
 .agents/*
 
 # Rust / Tauri builds
+target/
 src-tauri/target/
+
+# AI Models & Large Binaries
+models/
+*.bin
+*.onnx
+
+# Environment & Secret files
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# OS & Temp files
+Thumbs.db
+*.tmp

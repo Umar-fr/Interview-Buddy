@@ -96,9 +96,21 @@
               <p>Gemini AI is ready to detect and answer questions, quizzes, or tests from the live audio stream.</p>
             </div>
           </div>
-          <div style="padding: 10px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; gap: 8px; background: rgba(0,0,0,0.2);">
-            <input type="text" id="manual-ai-query" placeholder="Ask Gemini manually..." style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.4); color: white; font-size: 13px; outline: none;" />
-            <button id="manual-ai-btn" class="btn-primary" style="padding: 8px 14px;">Ask</button>
+          <div class="manual-ai-container">
+            <input 
+              type="text" 
+              id="manual-ai-query" 
+              class="manual-ai-input" 
+              placeholder="Ask Gemini manually... (Press Enter)" 
+              autocomplete="off" 
+              autocorrect="off" 
+              autocapitalize="off" 
+              spellcheck="false" 
+              data-form-type="other" 
+              data-lpignore="true" 
+              aria-autocomplete="none" 
+            />
+            <button id="manual-ai-btn" class="manual-ai-btn">Ask</button>
           </div>
         </div>
       </div>
@@ -168,7 +180,11 @@
             <input type="file" id="resume-file" accept=".pdf,.txt,.md" style="font-size: 11px; flex: 1; color: #ccc;" />
             <button id="resume-analyze-btn" class="btn-primary" style="padding: 4px 10px; font-size: 11px;">Analyze</button>
           </div>
-          <textarea id="resume-input" rows="3" placeholder="Paste your resume here, or upload a PDF and click Analyze to let Gemini extract your persona." style="width: 100%; resize: vertical; padding: 8px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; color: #fff; font-size: 11.5px;"></textarea>
+          <textarea id="resume-input" rows="3" placeholder="Paste your resume here, or upload a PDF and click Analyze to let Gemini extract your persona." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-form-type="other" data-lpignore="true" style="width: 100%; resize: vertical; padding: 8px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; color: #fff; font-size: 11.5px;"></textarea>
+        </div>
+
+        <div class="stealth-tip-card" style="margin-top: 10px; padding: 8px 10px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 6px; font-size: 11px; line-height: 1.4; color: rgba(255, 255, 255, 0.85);">
+          <span style="font-weight: 600; color: #c084fc;">🛡️ Stealth Tip:</span> To ensure Windows never shows 3-word predictive pills system-wide: Windows Settings (Win+I) → Time &amp; Language → Typing → Turn OFF <em>"Show text suggestions when typing on the physical keyboard"</em>.
         </div>
 
         <div id="modal-status-msg" class="modal-status-msg hidden"></div>
@@ -223,7 +239,7 @@
           <div id="coding-screenshot-preview" style="display: flex; gap: 8px; margin-bottom: 8px; overflow-x: auto; padding-bottom: 4px;">
              <!-- Images will be appended here -->
           </div>
-          <textarea id="coding-input" rows="5" style="width: 100%; resize: vertical; padding: 10px; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;" placeholder="Paste problem description here, or select text from the transcript..."></textarea>
+          <textarea id="coding-input" rows="5" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-form-type="other" data-lpignore="true" style="width: 100%; resize: vertical; padding: 10px; background: rgba(0,0,0,0.3); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;" placeholder="Paste problem description here, or select text from the transcript..."></textarea>
         </div>
         
         <div id="coding-result-container" class="hidden" style="margin-top: 15px;">
