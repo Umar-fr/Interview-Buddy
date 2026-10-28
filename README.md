@@ -113,10 +113,10 @@ flowchart LR
 
 ## 🚀 Setup & Launch Steps
 
-### 1. Clone & Install Dependencies
+### 1. Clone & Install Development Dependencies
 ```bash
-git clone https://github.com/your-username/interview-buddy.git
-cd interview-buddy
+git clone https://github.com/Umar-fr/Interview-Buddy.git
+cd Interview-Buddy
 npm install
 ```
 
@@ -141,23 +141,27 @@ npm install
 
 ## 📦 Download & Install (End Users)
 
-No development tools needed! Just download the installer for your platform:
+No Node.js, Rust, or development tools are needed to install the app. Download the installer for your platform from the [latest GitHub Release](../../releases/latest):
 
 | Platform | Format | File |
 |----------|--------|------|
-| **Windows 10/11** | NSIS Installer | `InterviewBuddy_0.1.0_x64-setup.exe` |
-| **macOS (Intel)** | DMG | `InterviewBuddy_0.1.0_x64.dmg` |
-| **macOS (Apple Silicon)** | DMG | `InterviewBuddy_0.1.0_aarch64.dmg` |
+| **Windows 10/11 (x64)** | NSIS Installer | `InterviewBuddy_<version>_x64-setup.exe` |
+| **macOS (Intel)** | DMG | `InterviewBuddy_<version>_x64.dmg` |
+| **macOS (Apple Silicon)** | DMG | `InterviewBuddy_<version>_aarch64.dmg` |
 
-Download the latest release from the [Releases](../../releases) page.
+The Windows installer is per-user and installs the WebView2 runtime automatically if it is not already present; an internet connection is needed for that download. macOS uses the system WebKit runtime and requires macOS 13.0 or later.
 
-> **Note:** On first launch, Interview Buddy will automatically download the Whisper speech model (~75MB). This is a one-time download.
+> **First use:** The Whisper speech model (~75MB) is downloaded automatically the first time audio transcription is used. An internet connection is needed for this one-time download. AI-generated answers also require your own Gemini API key, which you enter in the app.
+
+> **Windows first launch:** The installer is not Authenticode-signed, so Windows SmartScreen may show a warning. If you trust the download, choose **More info → Run anyway**.
+
+> **macOS first launch:** These DMGs are not signed or notarized. macOS may block the app the first time. Open the app using Control-click (or right-click) → **Open**, then confirm **Open**. If macOS still blocks it, go to **System Settings → Privacy & Security** and choose **Open Anyway** for InterviewBuddy.
 
 ---
 
 ## 🛠️ Building for Production (Developers)
 
-To generate optimized installers from source:
+To generate an installer from source (developer prerequisites above are required):
 
 ```bash
 # 1. Install dependencies
@@ -167,17 +171,17 @@ npm install
 npm run tauri build
 ```
 
-The output installers will be created inside `src-tauri/target/release/bundle/`:
-- **Windows**: `src-tauri/target/release/bundle/nsis/InterviewBuddy_0.1.0_x64-setup.exe`
-- **macOS**: `src-tauri/target/release/bundle/dmg/InterviewBuddy_0.1.0_x64.dmg`
+The output installer is created inside `src-tauri/target/release/bundle/` (or `src-tauri/target/<target>/release/bundle/` when building a specific macOS architecture).
 
 ### Automated Releases (CI/CD)
-Push a version tag to trigger automated builds via GitHub Actions:
+Push a version tag to trigger automated builds for Windows, macOS Intel, and Apple Silicon. Once all builds succeed, GitHub Actions publishes a download-ready GitHub Release:
 ```bash
+# Keep the versions in package.json, src-tauri/Cargo.toml, and
+# src-tauri/tauri.conf.json in sync before tagging.
 git tag v0.1.0
 git push origin v0.1.0
 ```
-This builds Windows + macOS installers and publishes them as a GitHub Release draft.
+The release contains the Windows `.exe` and both macOS `.dmg` installers. Dispatching the workflow manually also builds downloadable workflow artifacts; it publishes a release only when run against a `v*` tag.
 
 ---
 

@@ -60,7 +60,7 @@
       }
     },
     "macOS": {
-      "minimumSystemVersion": "12.3",
+      "minimumSystemVersion": "13.0",
       "frameworks": [],
       "signingIdentity": null
     }
