@@ -281,7 +281,8 @@ fn start_system_audio_capture(
             }
         };
 
-        let (transcription_tx, transcription_rx) = sync_channel(2);
+        let (transcription_tx, transcription_rx) =
+            sync_channel::<stt::vad::SpeechSegment>(2);
         let transcription_running = is_running_flag.clone();
         let transcription_app = app_handle.clone();
         thread::spawn(move || {
