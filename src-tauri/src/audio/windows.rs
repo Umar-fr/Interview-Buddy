@@ -12,11 +12,30 @@ pub struct WindowsAudioCapture {
     is_running: Arc<AtomicBool>,
 }
 
+struct CaptureWorkerPanicGuard {
+    status_tx: Sender<(i32, String)>,
+    is_running: Arc<AtomicBool>,
+}
+
+impl Drop for CaptureWorkerPanicGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.is_running.store(false, Ordering::SeqCst);
+            crate::diagnostics::record("ERROR", "Windows audio capture worker panicked");
+            let _ = self.status_tx.send((
+                super::AUDIO_STATUS_FATAL,
+                "Windows audio capture stopped unexpectedly. Open Logs for diagnostics.".to_string(),
+            ));
+        }
+    }
+}
+
 impl WindowsAudioCapture {
     pub fn start(
         target_sample_rate: u32,
         target_channels: u32,
     ) -> Result<(Self, Receiver<AudioChunk>, Receiver<(i32, String)>), String> {
+        crate::diagnostics::record("INFO", "Initializing Windows loopback audio capture");
         let (data_tx, data_rx) = super::audio_chunk_channel();
         let (status_tx, status_rx) = channel::<(i32, String)>();
 
@@ -25,6 +44,10 @@ impl WindowsAudioCapture {
         let (stop_tx, stop_rx) = channel::<()>();
 
         thread::spawn(move || {
+            let _panic_guard = CaptureWorkerPanicGuard {
+                status_tx: status_tx.clone(),
+                is_running: is_running_clone.clone(),
+            };
             let host = cpal::default_host();
 
             while is_running_clone.load(Ordering::Relaxed) {
@@ -32,6 +55,7 @@ impl WindowsAudioCapture {
                 let device = match host.default_output_device() {
                     Some(d) => d,
                     None => {
+                        crate::diagnostics::record("ERROR", "No default output audio device found");
                         let _ = status_tx.send((-1, "No default output audio device found. Retrying...".to_string()));
                         thread::sleep(Duration::from_millis(1500));
                         continue;
@@ -42,6 +66,7 @@ impl WindowsAudioCapture {
                 let config = match device.default_output_config() {
                     Ok(c) => c,
                     Err(e) => {
+                        crate::diagnostics::record("ERROR", format!("Could not read Windows output audio config: {e}"));
                         let _ = status_tx.send((-1, format!("Failed to get output config: {}. Retrying...", e)));
                         thread::sleep(Duration::from_millis(1500));
                         continue;
@@ -51,6 +76,12 @@ impl WindowsAudioCapture {
                 let sample_rate = config.sample_rate().0;
                 let channels = config.channels();
                 let sample_format = config.sample_format();
+                crate::diagnostics::record(
+                    "INFO",
+                    format!(
+                        "Windows output format detected; sample_rate={sample_rate}; channels={channels}; format={sample_format:?}"
+                    ),
+                );
                 if channels == 0 {
                     let _ = status_tx.send((-1, "Default audio device reported zero channels. Retrying...".to_string()));
                     thread::sleep(Duration::from_millis(1500));
@@ -68,6 +99,7 @@ impl WindowsAudioCapture {
 
                 let err_fn = move |err| {
                     eprintln!("[Windows Audio Error]: {}", err);
+                    crate::diagnostics::record("ERROR", format!("Windows audio stream error: {err}"));
                     let _ = err_status_tx.send((-1, format!("Windows audio stream error: {}", err)));
                     stream_err_flag_clone.store(true, Ordering::SeqCst);
                 };
@@ -219,10 +251,12 @@ impl WindowsAudioCapture {
                 match stream_result {
                     Ok(stream) => {
                         if let Err(e) = stream.play() {
+                            crate::diagnostics::record("ERROR", format!("Could not start Windows audio stream: {e}"));
                             let _ = status_tx.send((-1, format!("Failed to play stream: {}. Retrying...", e)));
                             thread::sleep(Duration::from_millis(1500));
                             continue;
                         }
+                        crate::diagnostics::record("INFO", "Windows audio stream is active");
 
                         // Loop while stream is active and not stopped
                         while is_running_clone.load(Ordering::Relaxed) && !stream_err_flag.load(Ordering::Relaxed) {
@@ -233,6 +267,7 @@ impl WindowsAudioCapture {
                         }
                     }
                     Err(e) => {
+                        crate::diagnostics::record("ERROR", format!("Could not build Windows audio stream: {e}"));
                         let _ = status_tx.send((-1, format!("Failed to build input stream: {}. Retrying...", e)));
                         thread::sleep(Duration::from_millis(1500));
                     }

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod audio;
+pub mod diagnostics;
 pub mod stt;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,6 +62,7 @@ fn emit_model_status(
 }
 
 fn stop_capture_after_model_error(app: &AppHandle, is_running: &AtomicBool, message: &str) {
+    diagnostics::record("ERROR", message);
     is_running.store(false, Ordering::SeqCst);
     let state = app.state::<AppAudioState>();
     #[cfg(target_os = "macos")]
@@ -79,6 +81,20 @@ fn stop_capture_after_model_error(app: &AppHandle, is_running: &AtomicBool, mess
             is_active: false,
         },
     );
+}
+
+struct AudioWorkerPanicGuard {
+    app: AppHandle,
+    is_running: Arc<AtomicBool>,
+    message: &'static str,
+}
+
+impl Drop for AudioWorkerPanicGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            stop_capture_after_model_error(&self.app, &self.is_running, self.message);
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -149,6 +165,15 @@ fn start_system_audio_capture(
     model_name: Option<String>,
     language: Option<String>,
 ) -> Result<String, String> {
+    diagnostics::record(
+        "INFO",
+        format!(
+            "Audio capture requested; model={}, language={}",
+            model_name.as_deref().unwrap_or("base"),
+            language.as_deref().unwrap_or("auto")
+        ),
+    );
+
     #[cfg(target_os = "macos")]
     let (data_rx, status_rx) = {
         let mut session_guard = state.session_mac.lock().map_err(|e| e.to_string())?;
@@ -157,7 +182,11 @@ fn start_system_audio_capture(
         }
 
         // Start 16,000 Hz Mono system audio capture
-        let (capture, data_rx, status_rx) = audio::macos::MacOSAudioCapture::start(16000, 1)?;
+        let (capture, data_rx, status_rx) =
+            audio::macos::MacOSAudioCapture::start(16000, 1).map_err(|error| {
+                diagnostics::record("ERROR", format!("Could not start macOS audio capture: {error}"));
+                error
+            })?;
         *session_guard = Some(capture);
         (data_rx, status_rx)
     };
@@ -169,7 +198,11 @@ fn start_system_audio_capture(
             return Ok("System audio capture is already running".to_string());
         }
 
-        let (capture, data_rx, status_rx) = audio::windows::WindowsAudioCapture::start(16000, 1)?;
+        let (capture, data_rx, status_rx) =
+            audio::windows::WindowsAudioCapture::start(16000, 1).map_err(|error| {
+                diagnostics::record("ERROR", format!("Could not start Windows audio capture: {error}"));
+                error
+            })?;
         *session_guard = Some(capture);
         (data_rx, status_rx)
     };
@@ -180,14 +213,22 @@ fn start_system_audio_capture(
     state.is_running.store(true, Ordering::SeqCst);
     let is_running_flag = state.is_running.clone();
     let app_handle = app.clone();
+    diagnostics::record("INFO", "Audio capture backend started");
 
     // Spawn audio processor and transcription background thread
     thread::spawn(move || {
+        let _panic_guard = AudioWorkerPanicGuard {
+            app: app_handle.clone(),
+            is_running: is_running_flag.clone(),
+            message: "Audio processing stopped unexpectedly. Open Logs for diagnostics.",
+        };
         let mut resampler = audio::AudioResampler::new(16000, 16000);
         let mut segmenter = stt::vad::AudioSegmenter::new(16000);
         let mut last_level_emit = Instant::now();
         let emit_interval = Duration::from_millis(50);
+        let mut audio_chunk_count = 0u64;
 
+        diagnostics::record("INFO", "Audio processing worker started");
         emit_model_status(
             &app_handle,
             "loading",
@@ -200,6 +241,9 @@ fn start_system_audio_capture(
         let model_choice = model_name.as_deref();
         let model_path = match stt::ensure_model_available(model_choice, move |status| {
             println!("[Whisper Model]: {}", status.message);
+            if status.status != "downloading" {
+                diagnostics::record("INFO", format!("Whisper model status: {}", status.status));
+            }
             emit_model_status(
                 &app_handle_download,
                 status.status,
@@ -211,6 +255,7 @@ fn start_system_audio_capture(
             Ok(path) => path,
             Err(err) => {
                 eprintln!("[Whisper Error]: Model load error: {}", err);
+                diagnostics::record("ERROR", format!("Whisper model load error: {err}"));
                 stop_capture_after_model_error(
                     &app_handle,
                     &is_running_flag,
@@ -254,6 +299,7 @@ fn start_system_audio_capture(
         let whisper_engine = match stt::WhisperEngine::new(&model_path, language) {
             Ok(engine) => {
                 println!("[Whisper]: Engine initialized successfully");
+                diagnostics::record("INFO", "Whisper engine initialized successfully");
                 emit_model_status(
                     &app_handle,
                     "ready",
@@ -265,6 +311,7 @@ fn start_system_audio_capture(
             }
             Err(err) => {
                 eprintln!("[Whisper Error]: Engine init error: {}", err);
+                diagnostics::record("ERROR", format!("Whisper engine initialization failed: {err}"));
                 stop_capture_after_model_error(
                     &app_handle,
                     &is_running_flag,
@@ -286,13 +333,27 @@ fn start_system_audio_capture(
         let transcription_running = is_running_flag.clone();
         let transcription_app = app_handle.clone();
         thread::spawn(move || {
+            let _panic_guard = AudioWorkerPanicGuard {
+                app: transcription_app.clone(),
+                is_running: transcription_running.clone(),
+                message: "Speech transcription stopped unexpectedly. Open Logs for diagnostics.",
+            };
             let mut whisper_engine = whisper_engine;
+            diagnostics::record("INFO", "Whisper transcription worker started");
             while transcription_running.load(Ordering::SeqCst) {
                 match transcription_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(segment) => match whisper_engine.transcribe(&segment.samples) {
+                    Ok(segment) => {
+                        diagnostics::record(
+                            "INFO",
+                            format!("Whisper inference started; samples={}", segment.samples.len()),
+                        );
+                        match whisper_engine.transcribe(&segment.samples) {
                         Ok(text) if !text.is_empty() => {
                             let now = chrono_format_time();
-                            println!("[Transcribed] [{}] {}", now, text);
+                            diagnostics::record(
+                                "INFO",
+                                format!("Whisper inference completed; characters={}", text.chars().count()),
+                            );
                             let _ = transcription_app.emit(
                                 "transcription-event",
                                 TranscriptSegmentEvent {
@@ -306,8 +367,10 @@ fn start_system_audio_capture(
                         Ok(_) => {}
                         Err(error) => {
                             eprintln!("[Whisper Inference Error]: {}", error);
+                            diagnostics::record("ERROR", format!("Whisper inference failed: {error}"));
                         }
-                    },
+                        }
+                    }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
@@ -322,6 +385,21 @@ fn start_system_audio_capture(
                 match status_rx.try_recv() {
                     Ok((code, msg)) => {
                         println!("[Audio Status] Code {}: {}", code, msg);
+                        diagnostics::record(
+                            if code >= 0 { "INFO" } else { "ERROR" },
+                            if code >= 0 {
+                                format!("Audio status {code}")
+                            } else {
+                                format!("Audio status {code}: {msg}")
+                            },
+                        );
+                        if code == audio::AUDIO_STATUS_FATAL {
+                            stop_capture_after_model_error(
+                                &app_handle,
+                                &is_running_flag,
+                                &msg,
+                            );
+                        }
                         let _ = app_handle.emit(
                             "audio-status",
                             audio::AudioStatusEvent {
@@ -337,6 +415,17 @@ fn start_system_audio_capture(
 
             // Receive audio sample chunks
             if let Ok(chunk) = data_rx.recv_timeout(Duration::from_millis(100)) {
+                audio_chunk_count += 1;
+                if audio_chunk_count == 1 || audio_chunk_count % 500 == 0 {
+                    diagnostics::record(
+                        "INFO",
+                        format!(
+                            "Audio chunks received={audio_chunk_count}; sample_rate={}; samples={}",
+                            chunk.sample_rate,
+                            chunk.samples.len()
+                        ),
+                    );
+                }
                 // Ensure audio is strictly 16kHz mono via resampler
                 let samples_16k = resampler.process(&chunk.samples, chunk.sample_rate);
 
@@ -354,6 +443,10 @@ fn start_system_audio_capture(
 
                 // Keep audio capture independent from slow Whisper inference.
                 if let Some(segment) = segmenter.process_samples(&samples_16k) {
+                    diagnostics::record(
+                        "INFO",
+                        format!("Speech segment queued; samples={}", segment.samples.len()),
+                    );
                     if let Err(TrySendError::Full(_)) = transcription_tx.try_send(segment) {
                         if last_overload_notice
                             .map_or(true, |last: Instant| last.elapsed() >= Duration::from_secs(5))
@@ -437,6 +530,11 @@ fn minimize_app(window: WebviewWindow) {
 }
 
 #[tauri::command]
+fn get_diagnostics() -> Result<diagnostics::DiagnosticLog, String> {
+    diagnostics::read()
+}
+
+#[tauri::command]
 fn take_screenshot(app: AppHandle) -> Result<String, String> {
     let screens = screenshots::Screen::all().map_err(|e| format!("Failed to get screens: {}", e))?;
     if screens.is_empty() {
@@ -487,6 +585,19 @@ fn take_screenshot(app: AppHandle) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = diagnostics::initialize() {
+        eprintln!("Could not initialize diagnostics log: {error}");
+    }
+    diagnostics::record(
+        "INFO",
+        format!("Application started; version={}", env!("CARGO_PKG_VERSION")),
+    );
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        diagnostics::record("PANIC", panic_info.to_string());
+        default_panic_hook(panic_info);
+    }));
+
     #[cfg(target_os = "windows")]
     {
         // Disable WebView2 autofill and spellcheck suggestions that can trigger OS-level candidate popups during screen sharing
@@ -535,6 +646,7 @@ pub fn run() {
             stop_system_audio_capture,
             close_app,
             minimize_app,
+            get_diagnostics,
             take_screenshot
         ])
         .setup(|app| {

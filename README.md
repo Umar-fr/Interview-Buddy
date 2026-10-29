@@ -37,7 +37,7 @@ These links will work after the `v0.1.3` release is published. For earlier versi
 - **No audio detected:** Check that sound is playing through the default output device. On macOS, grant Screen & System Audio Recording permission in System Settings.
 - **First transcription takes time:** The Whisper model downloads on first use; subsequent launches use the local copy.
 - **Model download status:** Open **Downloads** to see progress, verification, or a retry option if the model download fails.
-- **Windows closes during transcription:** Install the latest release linked above. If it still closes, report your Windows version and the faulting module/exception code from Reliability Monitor.
+- **Audio or transcription stops unexpectedly:** Open **Logs**, select and copy the diagnostics, then share them with your bug report. The log does not include recorded audio or transcript text; review it before sharing.
 - **Gemini answers are unavailable:** Confirm that your Gemini API key and selected model are valid. Transcription does not require a Gemini key.
 
 ## Contributing
@@ -50,5 +50,19 @@ To build from source, install Node.js 18+, Rust, and the platform’s Tauri prer
 npm ci
 npm run tauri dev
 ```
+
+To run the Rust tests on Windows with Visual Studio 2026, open its x64 Developer Command Prompt and run:
+
+```bat
+set "CMAKE_GENERATOR=Ninja"
+set "CMAKE_GENERATOR_PLATFORM="
+set "CMAKE_GENERATOR_TOOLSET="
+set "PATH=%ProgramFiles%\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
+cargo clean --manifest-path src-tauri\Cargo.toml -p whisper-rs-sys
+cargo test --manifest-path src-tauri\Cargo.toml --lib --locked
+npm run tauri dev
+```
+
+The clean removes a cached CMake build if it was previously configured with a different generator.
 
 For changes, create a focused branch, run `npm run build`, and open a pull request describing the behavior changed and how you tested it.

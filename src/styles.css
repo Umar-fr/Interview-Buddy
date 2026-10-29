@@ -665,6 +665,24 @@ main {
   overflow: hidden;
 }
 
+.diagnostics-card {
+  width: min(680px, 94%);
+  max-width: 680px;
+}
+
+.diagnostics-output {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(255, 255, 255, 0.85);
+  font: 11px/1.45 Consolas, "SFMono-Regular", monospace;
+  user-select: text;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;

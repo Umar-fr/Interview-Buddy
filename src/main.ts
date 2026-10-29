@@ -40,6 +40,14 @@ const audioMeterBar = document.getElementById("audio-meter-bar");
 const statusDetail = document.getElementById("status-detail");
 const modelStatus = document.getElementById("model-status");
 const downloadsButton = document.getElementById("downloads-btn");
+const diagnosticsButton = document.getElementById("diagnostics-btn");
+const diagnosticsModal = document.getElementById("diagnostics-modal");
+const diagnosticsCloseButton = document.getElementById("diagnostics-close");
+const diagnosticsRefreshButton = document.getElementById("diagnostics-refresh");
+const diagnosticsSelectButton = document.getElementById("diagnostics-select");
+const diagnosticsOutput = document.getElementById("diagnostics-output") as HTMLTextAreaElement | null;
+const diagnosticsPath = document.getElementById("diagnostics-path");
+const diagnosticsStatus = document.getElementById("diagnostics-status");
 const modelDownloadModal = document.getElementById("model-download-modal");
 const modelDownloadCloseButton = document.getElementById("model-download-close");
 const modelDownloadDoneButton = document.getElementById("model-download-done");
@@ -110,6 +118,38 @@ let audioCaptureStarted = false;
 let hasPromptedForGeminiApiKey = false;
 let latestModelStatus: ModelStatusPayload | null = null;
 let modelFileVerified = false;
+
+interface DiagnosticsPayload {
+  path: string;
+  contents: string;
+}
+
+async function refreshDiagnostics() {
+  if (!diagnosticsOutput) return;
+  if (diagnosticsStatus) diagnosticsStatus.textContent = "Loading logs...";
+  try {
+    const result = await invoke<DiagnosticsPayload>("get_diagnostics");
+    diagnosticsOutput.value = result.contents;
+    if (diagnosticsPath) diagnosticsPath.textContent = `Saved at: ${result.path}`;
+    if (diagnosticsStatus) diagnosticsStatus.textContent = "Logs refreshed.";
+  } catch (error) {
+    if (diagnosticsPath) diagnosticsPath.textContent = "Could not read the diagnostics log.";
+    if (diagnosticsStatus) diagnosticsStatus.textContent = String(error);
+    diagnosticsOutput.value = "";
+  }
+}
+
+diagnosticsButton?.addEventListener("click", async () => {
+  diagnosticsModal?.classList.remove("hidden");
+  await refreshDiagnostics();
+});
+diagnosticsCloseButton?.addEventListener("click", () => diagnosticsModal?.classList.add("hidden"));
+diagnosticsRefreshButton?.addEventListener("click", refreshDiagnostics);
+diagnosticsSelectButton?.addEventListener("click", () => {
+  diagnosticsOutput?.focus();
+  diagnosticsOutput?.select();
+  if (diagnosticsStatus) diagnosticsStatus.textContent = "Logs selected. Press Ctrl+C (or Command+C) to copy.";
+});
 
 function closeModelDownloadModal() {
   modelDownloadModal?.classList.add("hidden");

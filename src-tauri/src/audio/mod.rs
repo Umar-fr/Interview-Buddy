@@ -68,6 +68,8 @@ pub struct AudioLevelEvent {
 
 use rubato::{FastFixedIn, PolynomialDegree, Resampler};
 
+pub const AUDIO_STATUS_FATAL: i32 = -2;
+
 /// Stream resampler converting any input sample rate to target rate (16kHz mono for Whisper).
 pub struct AudioResampler {
     resampler: Option<FastFixedIn<f32>>,

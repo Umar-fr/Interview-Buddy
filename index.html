@@ -23,6 +23,7 @@
           <span id="ai-badge-label">Gemini AI</span>
         </button>
         <button id="downloads-btn" class="tool-btn downloads-btn">Downloads</button>
+        <button id="diagnostics-btn" class="tool-btn">Logs</button>
       </div>
 
       <div class="window-controls">
@@ -277,6 +278,31 @@
       <div class="modal-footer">
         <button id="model-download-retry" class="btn-primary download-retry" hidden>Retry download</button>
         <button id="model-download-done" class="btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="diagnostics-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="diagnostics-title">
+    <div class="modal-card diagnostics-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon">!</div>
+          <div>
+            <h2 id="diagnostics-title" class="modal-title">Application logs</h2>
+            <p class="modal-subtitle">Use these logs to help troubleshoot audio or transcription failures</p>
+          </div>
+        </div>
+        <button id="diagnostics-close" class="modal-close-btn" aria-label="Close application logs">×</button>
+      </div>
+      <div class="modal-body">
+        <p id="diagnostics-path" class="form-hint"></p>
+        <p class="form-hint">Logs include app errors and audio/model status, but not recorded audio or transcript text. Review before sharing.</p>
+        <textarea id="diagnostics-output" class="diagnostics-output" readonly spellcheck="false" aria-label="Application log contents"></textarea>
+        <p id="diagnostics-status" class="form-hint" aria-live="polite"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="diagnostics-refresh" class="btn-primary">Refresh</button>
+        <button id="diagnostics-select" class="btn-primary">Select logs</button>
       </div>
     </div>
   </div>
