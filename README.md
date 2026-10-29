@@ -6,22 +6,23 @@ InterviewBuddy is a desktop app for live system-audio transcription and optional
 
 | Platform | Download |
 | --- | --- |
-| Windows 10/11 (x64) | [Download installer](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.1_x64-setup.exe) |
-| macOS (Intel) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.1_x64.dmg) |
-| macOS (Apple Silicon) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.1_aarch64.dmg) |
+| Windows 10/11 (x64) | [Download installer](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.2_x64-setup.exe) |
+| macOS (Intel) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.2_x64.dmg) |
+| macOS (Apple Silicon) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.2_aarch64.dmg) |
 
-These links will work once the `v0.1.1` release build finishes. For earlier versions, visit [All Releases](https://github.com/Umar-fr/Interview-Buddy/releases).
+These links will work after the `v0.1.2` release is published. For earlier versions, visit [All Releases](https://github.com/Umar-fr/Interview-Buddy/releases).
 
 ### Installation notes
 
 - **Windows:** Run the downloaded installer. It installs per-user and downloads WebView2 if it is missing. Windows SmartScreen may show a warning because the installer is not signed.
 - **macOS:** Open the DMG and drag InterviewBuddy into Applications. The app is unsigned and may require Control-click → **Open** the first time. macOS 13 or later is required.
-- **First audio use:** The app downloads the Whisper speech model (~75 MB) once. An internet connection is required for this download.
+- **First launch:** Choose a multilingual Whisper model (Tiny ~75 MB, Base ~150 MB, or Small ~500 MB) and a transcription language. The selected model downloads on first use and is cached locally; an internet connection is required for the initial download.
+- **Transcription languages:** Auto-detect is recommended for speech that mixes Hindi and English. Results vary with audio quality and code-switching.
 - **AI answers:** Add your own Gemini API key in the app settings. Speech transcription runs locally; Gemini features send the text you choose to process to Google.
 
 ## Using the app
 
-1. Launch InterviewBuddy. System audio capture starts automatically.
+1. On first launch, select your Whisper model and transcription language. Later launches use the saved choices and start audio capture automatically.
 2. Play audio through your computer’s default output device. Transcriptions appear in the Live Transcript panel.
 3. To enable Gemini answers, open **Gemini AI**, enter your API key, detect/select a model, and save.
 4. Optionally add resume/background details in settings to personalize responses.

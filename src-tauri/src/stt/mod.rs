@@ -7,11 +7,12 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
 
-const MODEL_TINY_EN_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const MODEL_TINY_EN_NAME: &str = "ggml-tiny.en.bin";
-
-const MODEL_BASE_EN_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
-const MODEL_BASE_EN_NAME: &str = "ggml-base.en.bin";
+const MODEL_TINY_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin";
+const MODEL_BASE_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
+const MODEL_SMALL_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
 
 fn sanitize_samples(samples: &[f32]) -> Vec<f32> {
     samples
@@ -29,11 +30,12 @@ fn sanitize_samples(samples: &[f32]) -> Vec<f32> {
 pub struct WhisperEngine {
     state: WhisperState,
     _ctx: WhisperContext,
+    language: Option<String>,
 }
 
 impl WhisperEngine {
     /// Initialize Whisper context and persistent state from the model path
-    pub fn new(model_path: &Path) -> Result<Self, String> {
+    pub fn new(model_path: &Path, language: Option<String>) -> Result<Self, String> {
         let path_str = model_path
             .to_str()
             .ok_or_else(|| "Invalid model path unicode".to_string())?;
@@ -48,13 +50,17 @@ impl WhisperEngine {
             .create_state()
             .map_err(|e| format!("Failed to create persistent Whisper state: {:?}", e))?;
 
-        Ok(Self { state, _ctx: ctx })
+        Ok(Self {
+            state,
+            _ctx: ctx,
+            language,
+        })
     }
 
     /// Transcribe 16kHz mono PCM float samples rapidly
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some("en"));
+        params.set_language(self.language.as_deref());
         params.set_translate(false);
         params.set_no_context(true);
         params.set_single_segment(true);
@@ -73,6 +79,9 @@ impl WhisperEngine {
         params.set_entropy_thold(2.4);
         params.set_logprob_thold(-1.0);
         params.set_no_speech_thold(0.6);
+        params.set_initial_prompt(
+            "The speaker may switch between Hindi and English; preserve English technical terms.",
+        );
 
         self.state
             .full(params, &sanitize_samples(samples))
@@ -95,19 +104,18 @@ impl WhisperEngine {
 }
 
 /// Ensure Whisper model is available locally, checking bundled resources or downloading if not present.
-pub fn ensure_model_available<F>(model_choice: Option<&str>, progress_callback: F) -> Result<PathBuf, String>
+pub fn ensure_model_available<F>(
+    model_choice: Option<&str>,
+    progress_callback: F,
+) -> Result<PathBuf, String>
 where
     F: Fn(&str),
 {
-    let use_tiny = match model_choice {
-        Some(m) => m.contains("tiny"),
-        None => cfg!(target_os = "windows"), // Default to tiny on Windows for instant CPU speed
-    };
-
-    let (model_file_name, download_url, approx_size) = if use_tiny {
-        (MODEL_TINY_EN_NAME, MODEL_TINY_EN_URL, "~75MB")
-    } else {
-        (MODEL_BASE_EN_NAME, MODEL_BASE_EN_URL, "~140MB")
+    let (model_file_name, download_url, approx_size) = match model_choice.unwrap_or("base") {
+        "tiny" | "tiny.en" => ("ggml-tiny.bin", MODEL_TINY_URL, "~75 MB"),
+        "base" | "base.en" => ("ggml-base.bin", MODEL_BASE_URL, "~150 MB"),
+        "small" => ("ggml-small.bin", MODEL_SMALL_URL, "~500 MB"),
+        model => return Err(format!("Unsupported Whisper model: {}", model)),
     };
 
     // 1. Check bundled application resources first (for pre-packaged distributions)
@@ -121,7 +129,10 @@ where
             ];
             for candidate in candidates {
                 if candidate.exists() {
-                    progress_callback(&format!("Loaded pre-bundled Whisper model: {}", model_file_name));
+                    progress_callback(&format!(
+                        "Loaded pre-bundled Whisper model: {}",
+                        model_file_name
+                    ));
                     return Ok(candidate);
                 }
             }
@@ -131,15 +142,19 @@ where
     let base_dir = dirs::data_local_dir()
         .or_else(dirs::cache_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let model_dir = base_dir.join("interview-buddy").join("models");
-    fs::create_dir_all(&model_dir).map_err(|e| format!("Failed to create model directory: {}", e))?;
+    fs::create_dir_all(&model_dir)
+        .map_err(|e| format!("Failed to create model directory: {}", e))?;
 
     let model_path = model_dir.join(model_file_name);
 
     // Check if legacy system-transcriber directory has it
     if !model_path.exists() {
-        let legacy_model = base_dir.join("system-transcriber").join("models").join(model_file_name);
+        let legacy_model = base_dir
+            .join("system-transcriber")
+            .join("models")
+            .join(model_file_name);
         if legacy_model.exists() {
             let _ = fs::copy(&legacy_model, &model_path);
         }
@@ -148,13 +163,19 @@ where
     if model_path.exists() {
         if let Ok(metadata) = fs::metadata(&model_path) {
             if metadata.len() > 10_000_000 {
-                progress_callback(&format!("Whisper model loaded from local cache: {}", model_file_name));
+                progress_callback(&format!(
+                    "Whisper model loaded from local cache: {}",
+                    model_file_name
+                ));
                 return Ok(model_path);
             }
         }
     }
 
-    progress_callback(&format!("Downloading Whisper {} model ({})...", model_file_name, approx_size));
+    progress_callback(&format!(
+        "Downloading Whisper {} model ({})...",
+        model_file_name, approx_size
+    ));
 
     let response = ureq::get(download_url)
         .call()
@@ -168,23 +189,25 @@ where
     }
 
     let temp_path = model_dir.join(format!("{}.tmp", model_file_name));
-    let mut temp_file = File::create(&temp_path)
-        .map_err(|e| format!("Failed to create temp model file: {}", e))?;
+    let mut temp_file =
+        File::create(&temp_path).map_err(|e| format!("Failed to create temp model file: {}", e))?;
 
     let mut reader = response.into_reader();
-    copy(&mut reader, &mut temp_file)
-        .map_err(|e| format!("Failed to write model file: {}", e))?;
+    copy(&mut reader, &mut temp_file).map_err(|e| format!("Failed to write model file: {}", e))?;
 
     fs::rename(&temp_path, &model_path)
         .map_err(|e| format!("Failed to finalize model file: {}", e))?;
 
-    progress_callback(&format!("Whisper {} model downloaded successfully", model_file_name));
+    progress_callback(&format!(
+        "Whisper {} model downloaded successfully",
+        model_file_name
+    ));
     Ok(model_path)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_samples;
+    use super::{sanitize_samples, MODEL_BASE_URL, MODEL_SMALL_URL, MODEL_TINY_URL};
 
     #[test]
     fn sanitizes_non_finite_and_out_of_range_audio() {
@@ -194,5 +217,16 @@ mod tests {
             sanitize_samples(&samples),
             vec![0.0, 0.0, 0.0, -1.0, 0.5, 1.0]
         );
+    }
+
+    #[test]
+    fn selects_multilingual_whisper_models() {
+        assert_eq!(
+            super::ensure_model_available(Some("invalid"), |_| {}).unwrap_err(),
+            "Unsupported Whisper model: invalid"
+        );
+        assert!(MODEL_TINY_URL.ends_with("ggml-tiny.bin"));
+        assert!(MODEL_BASE_URL.ends_with("ggml-base.bin"));
+        assert!(MODEL_SMALL_URL.ends_with("ggml-small.bin"));
     }
 }

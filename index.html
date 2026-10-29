@@ -159,12 +159,22 @@
         <div class="form-group" style="margin-top: 6px;">
           <label for="whisper-model-select">Offline Speech-to-Text Model (Whisper)</label>
           <select id="whisper-model-select" style="width: 100%; padding: 7px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: #fff; font-size: 12px; outline: none;">
-            <option value="tiny.en">Tiny.en (~75MB) - Blazing Fast, Low Latency (Best for Windows/CPU)</option>
-            <option value="base.en">Base.en (~140MB) - High Accuracy (Recommended for Apple Silicon)</option>
+            <option value="tiny">Tiny multilingual (~75 MB) - Fastest, lower accuracy</option>
+            <option value="base">Base multilingual (~150 MB) - Balanced (recommended)</option>
+            <option value="small">Small multilingual (~500 MB) - Higher accuracy, slower</option>
           </select>
           <span class="form-hint">
-            Runs 100% offline on your device with no audio sent over the internet.
+            Multilingual models support English, Hindi, and mixed Hinglish. A model change applies after restarting the app.
           </span>
+        </div>
+
+        <div class="form-group">
+          <label for="whisper-language-select">Transcription language</label>
+          <select id="whisper-language-select" style="width: 100%; padding: 7px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: #fff; font-size: 12px; outline: none;">
+            <option value="auto">Auto-detect (recommended for Hinglish)</option>
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+          </select>
         </div>
 
         <div class="form-group-checkbox">
@@ -194,6 +204,43 @@
         <button id="save-key-btn" class="btn-primary">
           <span id="save-key-btn-text">Save & Connect</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="whisper-setup-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon">♫</div>
+          <div>
+            <h2 class="modal-title">Set up speech recognition</h2>
+            <p class="modal-subtitle">Choose an offline model for your device</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="whisper-setup-model">Whisper model</label>
+          <select id="whisper-setup-model">
+            <option value="tiny">Tiny multilingual (~75 MB) — fastest, lower accuracy</option>
+            <option value="base" selected>Base multilingual (~150 MB) — balanced, recommended</option>
+            <option value="small">Small multilingual (~500 MB) — higher accuracy, slower</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="whisper-setup-language">Transcription language</label>
+          <select id="whisper-setup-language">
+            <option value="auto" selected>Auto-detect (recommended for Hinglish)</option>
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+          </select>
+        </div>
+        <p class="form-hint">The selected model downloads once on first use. Audio transcription runs locally; audio is not sent to Gemini unless you enable AI features.</p>
+        <div id="whisper-setup-status" class="modal-status-msg hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="whisper-setup-start" class="btn-primary">Continue</button>
       </div>
     </div>
   </div>

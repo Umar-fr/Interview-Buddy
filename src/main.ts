@@ -72,6 +72,12 @@ const refreshModelsBtn = document.getElementById("refresh-models-btn") as HTMLBu
 const modelDetectHint = document.getElementById("model-detect-hint");
 const rememberKeyCheckbox = document.getElementById("remember-key-checkbox") as HTMLInputElement | null;
 const whisperModelSelect = document.getElementById("whisper-model-select") as HTMLSelectElement | null;
+const whisperLanguageSelect = document.getElementById("whisper-language-select") as HTMLSelectElement | null;
+const whisperSetupModal = document.getElementById("whisper-setup-modal");
+const whisperSetupModelSelect = document.getElementById("whisper-setup-model") as HTMLSelectElement | null;
+const whisperSetupLanguageSelect = document.getElementById("whisper-setup-language") as HTMLSelectElement | null;
+const whisperSetupStartButton = document.getElementById("whisper-setup-start") as HTMLButtonElement | null;
+const whisperSetupStatus = document.getElementById("whisper-setup-status");
 
 // ==========================================
 // Gemini AI State & Storage
@@ -82,17 +88,55 @@ const STORAGE_KEY_WHISPER_MODEL = "whisper_model";
 
 let geminiApiKey: string = localStorage.getItem(STORAGE_KEY_API_KEY) || "";
 let selectedModel: string = localStorage.getItem(STORAGE_KEY_MODEL) || "";
-let selectedWhisperModel: string = localStorage.getItem(STORAGE_KEY_WHISPER_MODEL) || "";
+const storedWhisperModel = localStorage.getItem(STORAGE_KEY_WHISPER_MODEL) || "";
+let selectedWhisperModel = storedWhisperModel === "tiny.en"
+  ? "tiny"
+  : storedWhisperModel === "base.en"
+    ? "base"
+    : storedWhisperModel;
+let selectedWhisperLanguage = localStorage.getItem("whisper_language") || "auto";
 let userResume: string = localStorage.getItem("userResume") || "";
+let audioCaptureStarted = false;
+let hasPromptedForGeminiApiKey = false;
 
-if (whisperModelSelect) {
-  if (selectedWhisperModel) {
-    whisperModelSelect.value = selectedWhisperModel;
+function saveWhisperPreferences(model: string, language: string) {
+  selectedWhisperModel = model;
+  selectedWhisperLanguage = language;
+  localStorage.setItem(STORAGE_KEY_WHISPER_MODEL, model);
+  localStorage.setItem("whisper_language", language);
+
+  if (whisperModelSelect) whisperModelSelect.value = model || "base";
+  if (whisperSetupModelSelect) whisperSetupModelSelect.value = model || "base";
+  if (whisperLanguageSelect) whisperLanguageSelect.value = language;
+  if (whisperSetupLanguageSelect) whisperSetupLanguageSelect.value = language;
+
+  if (audioCaptureStarted && modelStatus) {
+    modelStatus.textContent = "Speech model settings saved. Restart the app to apply them.";
   }
-  whisperModelSelect.addEventListener("change", () => {
-    selectedWhisperModel = whisperModelSelect.value;
-    localStorage.setItem(STORAGE_KEY_WHISPER_MODEL, selectedWhisperModel);
-  });
+}
+
+if (selectedWhisperModel && !["tiny", "base", "small"].includes(selectedWhisperModel)) {
+  selectedWhisperModel = "base";
+}
+if (!["auto", "en", "hi"].includes(selectedWhisperLanguage)) {
+  selectedWhisperLanguage = "auto";
+}
+saveWhisperPreferences(selectedWhisperModel, selectedWhisperLanguage);
+if (whisperSetupModelSelect) whisperSetupModelSelect.value = selectedWhisperModel || "base";
+if (whisperSetupLanguageSelect) whisperSetupLanguageSelect.value = selectedWhisperLanguage;
+
+whisperModelSelect?.addEventListener("change", () => {
+  saveWhisperPreferences(whisperModelSelect.value, whisperLanguageSelect?.value || "auto");
+});
+whisperLanguageSelect?.addEventListener("change", () => {
+  saveWhisperPreferences(whisperModelSelect?.value || "base", whisperLanguageSelect.value);
+});
+
+autoAnswerCheckbox?.addEventListener("change", () => {
+  localStorage.setItem("auto_answer_enabled", String(autoAnswerCheckbox.checked));
+});
+if (autoAnswerCheckbox) {
+  autoAnswerCheckbox.checked = localStorage.getItem("auto_answer_enabled") === "true";
 }
 
 if (resumeInput) {
@@ -188,6 +232,7 @@ function updateAiBadgeState() {
 
 // Show API key setup modal
 function openApiKeyModal() {
+  if (!geminiApiKey) hasPromptedForGeminiApiKey = true;
   if (modalOverlay) {
     modalOverlay.classList.remove("hidden");
     if (apiKeyInput) {
@@ -480,23 +525,64 @@ function showModalStatus(msg: string, type: "success" | "error") {
   }
 }
 
+async function startSystemAudioCapture() {
+  await invoke("start_system_audio_capture", {
+    modelName: selectedWhisperModel || "base",
+    language: selectedWhisperLanguage,
+  });
+  audioCaptureStarted = true;
+}
+
+whisperSetupStartButton?.addEventListener("click", async () => {
+  if (!whisperSetupModelSelect || !whisperSetupStartButton) return;
+
+  whisperSetupStartButton.disabled = true;
+  if (whisperSetupStatus) {
+    whisperSetupStatus.className = "modal-status-msg hidden";
+    whisperSetupStatus.textContent = "";
+  }
+
+  saveWhisperPreferences(
+    whisperSetupModelSelect.value,
+    whisperSetupLanguageSelect?.value || "auto",
+  );
+  whisperSetupModal?.classList.add("hidden");
+
+  try {
+    await startSystemAudioCapture();
+    if (!geminiApiKey) openApiKeyModal();
+  } catch (error) {
+    if (whisperSetupStatus) {
+      whisperSetupStatus.className = "modal-status-msg error";
+      whisperSetupStatus.textContent = `Could not start speech recognition: ${error}`;
+    }
+    whisperSetupModal?.classList.remove("hidden");
+  } finally {
+    whisperSetupStartButton.disabled = false;
+  }
+});
+
 // Check on initial startup: if no key is saved, prompt user
 window.addEventListener("DOMContentLoaded", () => {
   updateAiBadgeState();
-  if (!geminiApiKey) {
+  if (!geminiApiKey && selectedWhisperModel) {
     setTimeout(() => {
       openApiKeyModal();
     }, 400);
   }
 
+  if (!selectedWhisperModel) {
+    whisperSetupModal?.classList.remove("hidden");
+    return;
+  }
+
   // Start background processes after UI is ready to catch status events
   setTimeout(async () => {
     try {
-      await invoke("start_system_audio_capture", {
-        modelName: selectedWhisperModel || undefined,
-      });
-    } catch (e) {
-      console.error("Failed to start audio capture:", e);
+      await startSystemAudioCapture();
+    } catch (error) {
+      if (statusDetail) statusDetail.textContent = `Could not start audio capture: ${error}`;
+      console.error("Failed to start audio capture:", error);
     }
   }, 500);
 });
@@ -569,41 +655,24 @@ async function streamGeminiAnswer(
   const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel}`;
   const streamUrl = `https://generativelanguage.googleapis.com/v1beta/${cleanModel}:streamGenerateContent?alt=sse&key=${geminiApiKey}`;
 
-  const promptContext = userResume ? `\nMy Background / Resume (Internalize this as MY actual background and experience):\n${userResume}\n` : "";
-  const prompt = `You are me. I am currently in a live job interview. You are generating the exact words I will speak out loud to the interviewer.
-${promptContext}
-Interviewer's Question / Prompt:
+ const promptContext = userResume ? `\nMy background, for factual context:\n${userResume}\n` : "";
+ const prompt = `Answer the interviewer's question in concise, natural first-person speech. Start with the answer; do not add an introduction or mention AI. Be accurate, conversational, and complete without inventing personal experience.${promptContext}
+Question:
 """
 ${questionText}
 """
 
-Recent Conversation Context:
+Recent context:
 """
 ${contextHistory}
 """
+`;
 
-CRITICAL INSTRUCTIONS FOR SPOKEN DELIVERY:
-1. Spoken First-Person Voice: Speak strictly in the first person ("I", "my", "we"). Never refer to me as a third person or as a candidate. If my background/resume is provided, ground all stories, tools, and technical choices in my real projects and experience. If details are not in the resume, invent authentic, highly credible details consistent with a senior professional in this field.
-2. Complete, Concise & Cohesive: Deliver a fully completed response from start to finish. Never stop mid-thought or cut off early. Keep it clear, concise, and structured so it can be spoken in 60 to 90 seconds without wandering.
-3. Read-Aloud Ready: Write ONLY what I should say aloud. Absolutely NO introductory filler (NEVER say "Here is a concise answer:", "Certainly!", "That's a great question", "As an AI"). Start directly with the first spoken word.
-4. Behavioral & Situational Questions (STAR Method):
-   - Whenever asked a behavioral, situational, or HR question (e.g., "Tell me about a time...", "Describe a difficult challenge you overcame", "How do you handle conflict or tight deadlines?", "Why should we hire you?"):
-   - Structure the response naturally using the STAR Schema (Situation, Task, Action, Result) in conversational prose:
-     • Situation & Task: Briefly set the context, team environment, and the specific goal/problem I faced.
-     • Action: Clearly state what I personally did, tools/frameworks I utilized, and how I collaborated or led.
-     • Result: Conclude with a clear, measurable positive impact (e.g. reduced latency by 35%, eliminated data inconsistencies, saved $40k cloud cost, delivered ahead of schedule).
-5. Technical, Architecture & Process Questions:
-   - When asked for steps, processes, or technical concepts (e.g., "steps to perform machine learning and create a model", "how does Kafka partition work?", "DBT models vs views"):
-   - Provide a complete, logical step-by-step breakdown using smooth conversational transitions (e.g., "To build a machine learning model end-to-end, I follow five core phases. First, problem framing and exploratory data analysis... Second, data preprocessing and feature engineering... Third, baseline modeling and algorithm selection... Fourth, cross-validation and hyperparameter tuning... And finally, deployment, CI/CD, and drift monitoring.").
-   - Ensure EVERY step is completed and wrapped up cleanly so I have a complete roadmap to read aloud.
-6. Multiple-Choice / Quick Queries:
-   - State the correct answer clearly and conversationally in the opening sentence, followed by a crisp 1-2 sentence spoken explanation.`;
-
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      maxOutputTokens: 1200,
-      temperature: 0.3,
+ const payload = {
+   contents: [{ parts: [{ text: prompt }] }],
+   generationConfig: {
+     maxOutputTokens: 512,
+     temperature: 0.3,
     },
   };
 
@@ -716,23 +785,11 @@ function isQuestionLike(text: string): boolean {
   const clean = text.trim().toLowerCase();
   if (clean.includes("?")) return true;
 
-  // Common spoken quiz / test / query patterns
   const questionPatterns = [
-    /which one/i,
-    /what is/i,
-    /what was/i,
-    /what are/i,
-    /why is/i,
-    /why did/i,
-    /how do/i,
-    /how many/i,
-    /choose the/i,
-    /select the/i,
-    /should it be/i,
-    /correct option/i,
-    /question was/i,
-    /number (one|two|three|four|five|1|2|3|4|5)/i,
-    /true or false/i,
+    /\b(?:what|why|when|where|who|which|how)\s+(?:is|are|was|were|do|does|did|can|would|should|could|many|much|long|often|you|we)\b/i,
+    /\b(?:tell me|tell us|introduce yourself|explain|describe|walk me through|can you|could you|would you|how would you|what would you|give me an example|define|compare|choose the|select the|correct option|true or false|why should we hire you|your strengths|your weaknesses)\b/i,
+    /\b(?:kya|kaise|kyun|kyon|batao|samjhao|batayein)\b/i,
+    /(?:क्या|कैसे|क्यों|बताइए|समझाइए)/,
   ];
 
   return questionPatterns.some((pattern) => pattern.test(clean));
@@ -740,13 +797,17 @@ function isQuestionLike(text: string): boolean {
 
 function triggerAiQuestionAnswer(questionText: string, isManual = false) {
   if (!geminiApiKey) {
-    if (isManual) openApiKeyModal();
+    if (isManual || !hasPromptedForGeminiApiKey) {
+      openApiKeyModal();
+    } else if (statusDetail) {
+      statusDetail.textContent = "Configure a Gemini API key to use Auto-Answer.";
+    }
     return;
   }
 
   const now = Date.now();
   // Prevent duplicate query spamming within 8 seconds for the same text
-  if (!isManual && textSimilarity(lastAnsweredQuestion, questionText) > 0.7 && now - lastAnsweredTime < 8000) {
+  if (!isManual && textSimilarity(lastAnsweredQuestion, questionText) > 0.45 && now - lastAnsweredTime < 8000) {
     return;
   }
 
@@ -1012,10 +1073,14 @@ listen<TranscriptSegmentPayload>("transcription-event", (event) => {
   }
 
   // Check if Auto-Answer is enabled and if this or recent text is a question
-  if (autoAnswerCheckbox?.checked && isQuestionLike(cleanText)) {
-    // Collect rolling window around the question
-    const questionSnippet = cleanText;
-    triggerAiQuestionAnswer(questionSnippet, false);
+  if (autoAnswerCheckbox?.checked) {
+    const recentSpeech = transcriptHistory
+      .slice(-2)
+      .map((item) => item.text)
+      .join(" ");
+    if (isQuestionLike(recentSpeech)) {
+      triggerAiQuestionAnswer(recentSpeech, false);
+    }
   }
 });
 

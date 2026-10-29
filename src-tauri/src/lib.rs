@@ -99,6 +99,7 @@ fn start_system_audio_capture(
     app: AppHandle,
     state: State<'_, AppAudioState>,
     model_name: Option<String>,
+    language: Option<String>,
 ) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     let (data_rx, status_rx) = {
@@ -174,7 +175,25 @@ fn start_system_audio_capture(
             }
         };
 
-        let mut whisper_engine = match stt::WhisperEngine::new(&model_path) {
+        let language = match language.as_deref() {
+            Some("en") => Some("en".to_string()),
+            Some("hi") => Some("hi".to_string()),
+            None | Some("auto") => None,
+            Some(other) => {
+                let message = format!("Unsupported transcription language: {}", other);
+                let _ = app_handle.emit(
+                    "model-status",
+                    ModelStatusEvent {
+                        status: "error".to_string(),
+                        message: message.clone(),
+                    },
+                );
+                eprintln!("[Whisper Error]: {}", message);
+                return;
+            }
+        };
+
+        let mut whisper_engine = match stt::WhisperEngine::new(&model_path, language) {
             Ok(engine) => {
                 println!("[Whisper]: Engine initialized successfully");
                 let _ = app_handle.emit(
