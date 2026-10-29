@@ -4,6 +4,7 @@ pub mod audio;
 pub mod stt;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +24,9 @@ use objc::{msg_send, sel, sel_impl};
 pub struct ModelStatusEvent {
     pub status: String,
     pub message: String,
+    pub progress: Option<f64>,
+    pub downloaded_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +35,50 @@ pub struct TranscriptSegmentEvent {
     pub text: String,
     pub is_final: bool,
     pub timestamp: String,
+}
+
+fn emit_model_status(
+    app: &AppHandle,
+    status: &str,
+    message: String,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+) {
+    let progress = total_bytes
+        .filter(|total| *total > 0)
+        .zip(downloaded_bytes)
+        .map(|(total, downloaded)| (downloaded as f64 / total as f64 * 100.0).min(100.0));
+    let _ = app.emit(
+        "model-status",
+        ModelStatusEvent {
+            status: status.to_string(),
+            message,
+            progress,
+            downloaded_bytes,
+            total_bytes,
+        },
+    );
+}
+
+fn stop_capture_after_model_error(app: &AppHandle, is_running: &AtomicBool, message: &str) {
+    is_running.store(false, Ordering::SeqCst);
+    let state = app.state::<AppAudioState>();
+    #[cfg(target_os = "macos")]
+    if let Ok(mut session) = state.session_mac.lock() {
+        *session = None;
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(mut session) = state.session_win.lock() {
+        *session = None;
+    }
+    let _ = app.emit(
+        "audio-status",
+        audio::AudioStatusEvent {
+            status: "error".to_string(),
+            message: message.to_string(),
+            is_active: false,
+        },
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -140,97 +188,150 @@ fn start_system_audio_capture(
         let mut last_level_emit = Instant::now();
         let emit_interval = Duration::from_millis(50);
 
-        // Load or download Whisper model
-        let _ = app_handle.emit(
-            "model-status",
-            ModelStatusEvent {
-                status: "loading".to_string(),
-                message: "Initializing Whisper speech recognition model...".to_string(),
-            },
+        emit_model_status(
+            &app_handle,
+            "loading",
+            "Checking Whisper model...".to_string(),
+            None,
+            None,
         );
 
         let app_handle_download = app_handle.clone();
         let model_choice = model_name.as_deref();
-        let model_path = match stt::ensure_model_available(model_choice, move |msg| {
-            println!("[Whisper Model]: {}", msg);
-            let _ = app_handle_download.emit(
-                "model-status",
-                ModelStatusEvent {
-                    status: "downloading".to_string(),
-                    message: msg.to_string(),
-                },
+        let model_path = match stt::ensure_model_available(model_choice, move |status| {
+            println!("[Whisper Model]: {}", status.message);
+            emit_model_status(
+                &app_handle_download,
+                status.status,
+                status.message,
+                status.downloaded_bytes,
+                status.total_bytes,
             );
         }) {
             Ok(path) => path,
             Err(err) => {
                 eprintln!("[Whisper Error]: Model load error: {}", err);
-                let _ = app_handle.emit(
-                    "model-status",
-                    ModelStatusEvent {
-                        status: "error".to_string(),
-                        message: format!("Model load error: {}", err),
-                    },
+                stop_capture_after_model_error(
+                    &app_handle,
+                    &is_running_flag,
+                    "Speech model download failed. Open Downloads to retry.",
+                );
+                emit_model_status(
+                    &app_handle,
+                    "error",
+                    format!("Model download error: {}", err),
+                    None,
+                    None,
                 );
                 return;
             }
         };
 
+        emit_model_status(
+            &app_handle,
+            "loading",
+            "Loading Whisper model into memory...".to_string(),
+            None,
+            None,
+        );
         let language = match language.as_deref() {
             Some("en") => Some("en".to_string()),
             Some("hi") => Some("hi".to_string()),
             None | Some("auto") => None,
             Some(other) => {
                 let message = format!("Unsupported transcription language: {}", other);
-                let _ = app_handle.emit(
-                    "model-status",
-                    ModelStatusEvent {
-                        status: "error".to_string(),
-                        message: message.clone(),
-                    },
-                );
                 eprintln!("[Whisper Error]: {}", message);
+                stop_capture_after_model_error(
+                    &app_handle,
+                    &is_running_flag,
+                    "Unsupported transcription language; audio capture stopped.",
+                );
+                emit_model_status(&app_handle, "error", message, None, None);
                 return;
             }
         };
 
-        let mut whisper_engine = match stt::WhisperEngine::new(&model_path, language) {
+        let whisper_engine = match stt::WhisperEngine::new(&model_path, language) {
             Ok(engine) => {
                 println!("[Whisper]: Engine initialized successfully");
-                let _ = app_handle.emit(
-                    "model-status",
-                    ModelStatusEvent {
-                        status: "ready".to_string(),
-                        message: "Whisper STT model ready (offline)".to_string(),
-                    },
+                emit_model_status(
+                    &app_handle,
+                    "ready",
+                    "Whisper model ready (offline).".to_string(),
+                    None,
+                    None,
                 );
-                Some(engine)
+                engine
             }
             Err(err) => {
                 eprintln!("[Whisper Error]: Engine init error: {}", err);
-                let _ = app_handle.emit(
-                    "model-status",
-                    ModelStatusEvent {
-                        status: "error".to_string(),
-                        message: format!("Whisper init error: {}", err),
-                    },
+                stop_capture_after_model_error(
+                    &app_handle,
+                    &is_running_flag,
+                    "Whisper model could not be loaded. Open Downloads to retry.",
                 );
-                None
+                emit_model_status(
+                    &app_handle,
+                    "error",
+                    format!("Could not load Whisper model: {}", err),
+                    None,
+                    None,
+                );
+                return;
             }
         };
 
+        let (transcription_tx, transcription_rx) = sync_channel(2);
+        let transcription_running = is_running_flag.clone();
+        let transcription_app = app_handle.clone();
+        thread::spawn(move || {
+            let mut whisper_engine = whisper_engine;
+            while transcription_running.load(Ordering::SeqCst) {
+                match transcription_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(segment) => match whisper_engine.transcribe(&segment.samples) {
+                        Ok(text) if !text.is_empty() => {
+                            let now = chrono_format_time();
+                            println!("[Transcribed] [{}] {}", now, text);
+                            let _ = transcription_app.emit(
+                                "transcription-event",
+                                TranscriptSegmentEvent {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    text,
+                                    is_final: true,
+                                    timestamp: now,
+                                },
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            eprintln!("[Whisper Inference Error]: {}", error);
+                        }
+                    },
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+
         // Main processing loop
+        let mut last_overload_notice = None;
         while is_running_flag.load(Ordering::SeqCst) {
             // Forward audio status messages
-            if let Ok((code, msg)) = status_rx.try_recv() {
-                println!("[Audio Status] Code {}: {}", code, msg);
-                let _ = app_handle.emit(
-                    "audio-status",
-                    audio::AudioStatusEvent {
-                        status: if code >= 0 { "active".to_string() } else { "error".to_string() },
-                        message: msg,
-                        is_active: code >= 0,
-                    },
-                );
+            loop {
+                match status_rx.try_recv() {
+                    Ok((code, msg)) => {
+                        println!("[Audio Status] Code {}: {}", code, msg);
+                        let _ = app_handle.emit(
+                            "audio-status",
+                            audio::AudioStatusEvent {
+                                status: if code >= 0 { "active".to_string() } else { "error".to_string() },
+                                message: msg,
+                                is_active: code >= 0,
+                            },
+                        );
+                    }
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                }
             }
 
             // Receive audio sample chunks
@@ -250,29 +351,21 @@ fn start_system_audio_capture(
                     last_level_emit = Instant::now();
                 }
 
-                // Process audio with Voice Activity Detection (VAD)
+                // Keep audio capture independent from slow Whisper inference.
                 if let Some(segment) = segmenter.process_samples(&samples_16k) {
-                    if let Some(ref mut engine) = whisper_engine {
-                        match engine.transcribe(&segment.samples) {
-                            Ok(text) => {
-                                if !text.is_empty() {
-                                    let now = chrono_format_time();
-                                    println!("[Transcribed] [{}] {}", now, text);
-
-                                    let _ = app_handle.emit(
-                                        "transcription-event",
-                                        TranscriptSegmentEvent {
-                                            id: uuid::Uuid::new_v4().to_string(),
-                                            text,
-                                            is_final: true,
-                                            timestamp: now,
-                                        },
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[Whisper Inference Error]: {}", e);
-                            }
+                    if let Err(TrySendError::Full(_)) = transcription_tx.try_send(segment) {
+                        if last_overload_notice
+                            .map_or(true, |last: Instant| last.elapsed() >= Duration::from_secs(5))
+                        {
+                            let _ = app_handle.emit(
+                                "audio-status",
+                                audio::AudioStatusEvent {
+                                    status: "active".to_string(),
+                                    message: "Speech recognition is busy; skipping an audio segment to keep the app responsive.".to_string(),
+                                    is_active: true,
+                                },
+                            );
+                            last_overload_notice = Some(Instant::now());
                         }
                     }
                 }
@@ -403,6 +496,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {

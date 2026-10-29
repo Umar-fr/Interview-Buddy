@@ -5,6 +5,41 @@ pub mod macos;
 pub mod windows;
 
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+
+const AUDIO_CHUNK_QUEUE_CAPACITY: usize = 64;
+
+pub fn audio_chunk_channel() -> (SyncSender<AudioChunk>, Receiver<AudioChunk>) {
+    sync_channel(AUDIO_CHUNK_QUEUE_CAPACITY)
+}
+
+pub fn try_send_audio_chunk(sender: &SyncSender<AudioChunk>, chunk: AudioChunk) {
+    if let Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) = sender.try_send(chunk) {
+        // Audio callbacks must never block; discard chunks if processing falls behind.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{audio_chunk_channel, try_send_audio_chunk, AudioChunk, AUDIO_CHUNK_QUEUE_CAPACITY};
+
+    #[test]
+    fn audio_callback_queue_stays_bounded() {
+        let (sender, receiver) = audio_chunk_channel();
+        for _ in 0..=AUDIO_CHUNK_QUEUE_CAPACITY {
+            try_send_audio_chunk(
+                &sender,
+                AudioChunk {
+                    samples: vec![0.0],
+                    sample_rate: 16_000,
+                    channels: 1,
+                },
+            );
+        }
+
+        assert_eq!(receiver.try_iter().count(), AUDIO_CHUNK_QUEUE_CAPACITY);
+    }
+}
 
 /// Audio sample data packet delivered by the capture backend.
 #[derive(Debug, Clone)]

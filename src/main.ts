@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCodingPrompt } from "./prompts/coding";
 
 const appWindow = getCurrentWindow();
@@ -38,6 +39,15 @@ const audioStatusLabel = document.getElementById("audio-status-label");
 const audioMeterBar = document.getElementById("audio-meter-bar");
 const statusDetail = document.getElementById("status-detail");
 const modelStatus = document.getElementById("model-status");
+const downloadsButton = document.getElementById("downloads-btn");
+const modelDownloadModal = document.getElementById("model-download-modal");
+const modelDownloadCloseButton = document.getElementById("model-download-close");
+const modelDownloadDoneButton = document.getElementById("model-download-done");
+const modelDownloadRetryButton = document.getElementById("model-download-retry") as HTMLButtonElement | null;
+const modelDownloadMessage = document.getElementById("model-download-message");
+const modelDownloadSize = document.getElementById("model-download-size");
+const modelDownloadProgress = document.getElementById("model-download-progress");
+const modelDownloadProgressBar = document.getElementById("model-download-progress-bar");
 const aiBadgeBtn = document.getElementById("ai-settings-btn");
 const aiBadgeLabel = document.getElementById("ai-badge-label");
 
@@ -98,6 +108,93 @@ let selectedWhisperLanguage = localStorage.getItem("whisper_language") || "auto"
 let userResume: string = localStorage.getItem("userResume") || "";
 let audioCaptureStarted = false;
 let hasPromptedForGeminiApiKey = false;
+let latestModelStatus: ModelStatusPayload | null = null;
+let modelFileVerified = false;
+
+function closeModelDownloadModal() {
+  modelDownloadModal?.classList.add("hidden");
+}
+
+downloadsButton?.addEventListener("click", () => {
+  if (latestModelStatus) updateModelDownloadView(latestModelStatus);
+  modelDownloadModal?.classList.remove("hidden");
+});
+modelDownloadCloseButton?.addEventListener("click", closeModelDownloadModal);
+modelDownloadDoneButton?.addEventListener("click", closeModelDownloadModal);
+modelDownloadRetryButton?.addEventListener("click", async () => {
+  if (!modelDownloadRetryButton) return;
+  modelDownloadRetryButton.disabled = true;
+  modelDownloadRetryButton.textContent = "Retrying...";
+  try {
+    await startSystemAudioCapture();
+  } catch (error) {
+    if (modelDownloadMessage) {
+      modelDownloadMessage.textContent = `Could not restart model download: ${error}`;
+    }
+  } finally {
+    modelDownloadRetryButton.disabled = false;
+    modelDownloadRetryButton.textContent = "Retry download";
+  }
+});
+
+function formatDownloadSize(bytes: number): string {
+  const megabytes = bytes / (1024 * 1024);
+  return `${megabytes.toFixed(1)} MB`;
+}
+
+function updateModelDownloadView(status: ModelStatusPayload) {
+  latestModelStatus = status;
+  if (status.status === "cached" || status.status === "downloaded") {
+    modelFileVerified = true;
+  } else if (status.status === "downloading" && status.downloaded_bytes == null) {
+    modelFileVerified = false;
+  }
+  if (modelDownloadMessage) modelDownloadMessage.textContent = status.message;
+
+  const downloadedBytes = status.downloaded_bytes ?? undefined;
+  const totalBytes = status.total_bytes ?? undefined;
+  if (modelDownloadSize) {
+    if (downloadedBytes !== undefined && totalBytes !== undefined && totalBytes > 0) {
+      modelDownloadSize.textContent =
+        `${formatDownloadSize(downloadedBytes)} of ${formatDownloadSize(totalBytes)} downloaded`;
+    } else if (downloadedBytes !== undefined) {
+      modelDownloadSize.textContent = `${formatDownloadSize(downloadedBytes)} downloaded`;
+    } else if (status.status === "cached" || status.status === "ready") {
+      modelDownloadSize.textContent = "The model is available on this device.";
+    } else if (modelFileVerified && status.status === "loading") {
+      modelDownloadSize.textContent = "The model is verified and stored locally.";
+    } else if (status.status === "error") {
+      modelDownloadSize.textContent = "The model was not installed. Resolve the issue, then use Retry download.";
+    } else {
+      modelDownloadSize.textContent = "Waiting for download progress...";
+    }
+  }
+
+  const progress = status.progress;
+  if (modelDownloadRetryButton) {
+    modelDownloadRetryButton.hidden = status.status !== "error";
+  }
+  modelDownloadProgress?.classList.toggle(
+    "indeterminate",
+    progress == null && (status.status === "downloading" || status.status === "verifying" || status.status === "loading"),
+  );
+  if (modelDownloadProgressBar) {
+    const percent = progress ?? (modelFileVerified || status.status === "ready" ? 100 : 0);
+    modelDownloadProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  }
+  modelDownloadProgress?.setAttribute(
+    "aria-valuenow",
+    String(progress ?? (modelFileVerified || status.status === "ready" ? 100 : 0)),
+  );
+
+  if (
+    status.status === "downloading" ||
+    status.status === "verifying" ||
+    status.status === "error"
+  ) {
+    modelDownloadModal?.classList.remove("hidden");
+  }
+}
 
 function saveWhisperPreferences(model: string, language: string) {
   selectedWhisperModel = model;
@@ -291,10 +388,12 @@ toggleKeyVisibilityBtn?.addEventListener("click", () => {
 document.getElementById("open-ai-studio-link")?.addEventListener("click", async (e) => {
   e.preventDefault();
   try {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
     await openUrl("https://aistudio.google.com/app/apikey");
-  } catch {
-    window.open("https://aistudio.google.com/app/apikey", "_blank");
+  } catch (error) {
+    showModalStatus(
+      `Could not open Google AI Studio in your browser: ${error instanceof Error ? error.message : String(error)}`,
+      "error",
+    );
   }
 });
 
@@ -336,6 +435,36 @@ modelSelect?.addEventListener("change", () => {
 interface DetectedModel {
   id: string;
   label: string;
+}
+
+function compareGeminiModelsDescending(a: DetectedModel, b: DetectedModel): number {
+  const versionParts = (id: string) =>
+    (id.match(/^gemini-(\d+(?:\.\d+)*)/i)?.[1] || "0")
+      .split(".")
+      .map((part) => Number(part));
+  const aVersion = versionParts(a.id);
+  const bVersion = versionParts(b.id);
+  for (let i = 0; i < Math.max(aVersion.length, bVersion.length); i++) {
+    const difference = (bVersion[i] || 0) - (aVersion[i] || 0);
+    if (difference !== 0) return difference;
+  }
+
+  const rank = (id: string) => {
+    const name = id.toLowerCase();
+    if (name.includes("ultra")) return 5;
+    if (name.includes("pro")) return 4;
+    if (name.includes("flash-lite") || name.includes("flash_lite")) return 2;
+    if (name.includes("flash")) return 3;
+    if (name.includes("nano")) return 1;
+    return 0;
+  };
+  const tierDifference = rank(b.id) - rank(a.id);
+  if (tierDifference !== 0) return tierDifference;
+
+  const stabilityRank = (id: string) =>
+    /\b(?:exp|experimental)\b/i.test(id) || /-exp(?:-|$)/i.test(id) ? 0 : 1;
+  const stabilityDifference = stabilityRank(b.id) - stabilityRank(a.id);
+  return stabilityDifference || a.id.localeCompare(b.id);
 }
 
 async function detectAndPopulateModels(key: string, forcePrompt = false): Promise<DetectedModel[]> {
@@ -380,22 +509,25 @@ async function detectAndPopulateModels(key: string, forcePrompt = false): Promis
       return [];
     }
 
-    const rawModels = data.models || [];
+    const rawModels: Array<{
+      name?: string;
+      displayName?: string;
+      supportedGenerationMethods?: string[];
+    }> = Array.isArray(data.models) ? data.models : [];
     const validModels: DetectedModel[] = rawModels
-      .filter((m: any) => m.supportedGenerationMethods?.includes("generateContent"))
-      .filter((m: any) => {
-        const name = (m.name || "").toLowerCase();
-        // Filter out embeddings or non-generative endpoints
-        return !name.includes("embedding") && !name.includes("aqa") && !name.includes("2.5-flash");
+      .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
+      .map((model) => {
+        const cleanId = (model.name || "").replace(/^models\//, "");
+        return { cleanId, displayName: model.displayName };
       })
-      .map((m: any) => {
-        const cleanId = m.name.replace(/^models\//, "");
-        const displayName = m.displayName ? `${m.displayName} (${cleanId})` : cleanId;
+      .filter(({ cleanId }) => /^gemini-/i.test(cleanId))
+      .map(({ cleanId, displayName }) => {
         return {
           id: cleanId,
-          label: displayName,
+          label: displayName ? `${displayName} (${cleanId})` : cleanId,
         };
-      });
+      })
+      .sort(compareGeminiModelsDescending);
 
     if (validModels.length === 0) {
       if (modelSelect) {
@@ -419,10 +551,10 @@ async function detectAndPopulateModels(key: string, forcePrompt = false): Promis
       defaultOption.textContent = `-- Select a model (${validModels.length} detected) --`;
       modelSelect.appendChild(defaultOption);
 
-      validModels.forEach((m) => {
+      validModels.forEach((m, index) => {
         const opt = document.createElement("option");
         opt.value = m.id;
-        opt.textContent = m.label;
+        opt.textContent = index === 0 ? `${m.label} — Best available` : m.label;
         modelSelect.appendChild(opt);
       });
 
@@ -434,13 +566,13 @@ async function detectAndPopulateModels(key: string, forcePrompt = false): Promis
         modelSelect.value = selectedModel;
         defaultOption.selected = false;
       } else {
-        defaultOption.selected = true;
-        modelSelect.value = "";
+        modelSelect.value = validModels[0].id;
+        defaultOption.selected = false;
       }
     }
 
     if (modelDetectHint) {
-      modelDetectHint.textContent = `✓ Detected ${validModels.length} models from your API key. Please select one.`;
+      modelDetectHint.textContent = `✓ Detected ${validModels.length} compatible Gemini models, ordered from most capable to fastest.`;
       modelDetectHint.style.color = "#34d399";
     }
 
@@ -550,7 +682,6 @@ whisperSetupStartButton?.addEventListener("click", async () => {
 
   try {
     await startSystemAudioCapture();
-    if (!geminiApiKey) openApiKeyModal();
   } catch (error) {
     if (whisperSetupStatus) {
       whisperSetupStatus.className = "modal-status-msg error";
@@ -565,12 +696,6 @@ whisperSetupStartButton?.addEventListener("click", async () => {
 // Check on initial startup: if no key is saved, prompt user
 window.addEventListener("DOMContentLoaded", () => {
   updateAiBadgeState();
-  if (!geminiApiKey && selectedWhisperModel) {
-    setTimeout(() => {
-      openApiKeyModal();
-    }, 400);
-  }
-
   if (!selectedWhisperModel) {
     whisperSetupModal?.classList.remove("hidden");
     return;
@@ -647,9 +772,8 @@ async function streamGeminiAnswer(
     throw new Error("No Gemini API Key configured. Click '✦ Set API Key' to configure.");
   }
 
-  if (selectedModel.includes("2.5") || !selectedModel) {
-    selectedModel = "gemini-2.0-flash";
-    localStorage.setItem(STORAGE_KEY_MODEL, selectedModel);
+  if (!selectedModel) {
+    throw new Error("Select and test a Gemini model in AI settings before asking a question.");
   }
 
   const cleanModel = selectedModel.startsWith("models/") ? selectedModel : `models/${selectedModel}`;
@@ -974,8 +1098,11 @@ interface AudioLevelPayload {
 }
 
 interface ModelStatusPayload {
-  status: "downloading" | "loading" | "ready" | "error";
+  status: "downloading" | "verifying" | "downloaded" | "cached" | "loading" | "ready" | "error";
   message: string;
+  progress?: number | null;
+  downloaded_bytes?: number | null;
+  total_bytes?: number | null;
 }
 
 interface TranscriptSegmentPayload {
@@ -1005,6 +1132,7 @@ listen<AudioStatusPayload>("audio-status", (event) => {
 // Model loading status
 listen<ModelStatusPayload>("model-status", (event) => {
   const { status, message } = event.payload;
+  updateModelDownloadView(event.payload);
   if (modelStatus) {
     modelStatus.textContent = message;
     if (status === "ready") {
@@ -1015,6 +1143,10 @@ listen<ModelStatusPayload>("model-status", (event) => {
       modelStatus.style.color = "rgba(248, 113, 113, 0.9)";
       modelStatus.style.borderColor = "rgba(239, 68, 68, 0.3)";
       modelStatus.style.background = "rgba(239, 68, 68, 0.1)";
+    } else {
+      modelStatus.style.color = "rgba(147, 197, 253, 0.85)";
+      modelStatus.style.borderColor = "rgba(59, 130, 246, 0.2)";
+      modelStatus.style.background = "rgba(59, 130, 246, 0.1)";
     }
   }
 });

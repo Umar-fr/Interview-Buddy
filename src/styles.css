@@ -149,6 +149,11 @@ button, input, select, textarea, .modal-overlay, .content-split, .audio-monitor 
   transition: all 0.2s ease;
 }
 
+.downloads-btn {
+  -webkit-app-region: no-drag;
+  white-space: nowrap;
+}
+
 .ai-badge-btn:hover {
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.35), rgba(59, 130, 246, 0.35));
   border-color: rgba(168, 85, 247, 0.6);
@@ -857,6 +862,52 @@ main {
   background: rgba(16, 185, 129, 0.15);
   border: 1px solid rgba(16, 185, 129, 0.35);
   color: #34d399;
+}
+
+.download-status-message {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  overflow-wrap: anywhere;
+}
+
+.download-progress-track {
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.download-progress-bar {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8b5cf6, #3b82f6);
+  transition: width 0.2s ease;
+}
+
+.download-progress-track.indeterminate .download-progress-bar {
+  width: 35%;
+  animation: download-progress 1.2s ease-in-out infinite alternate;
+}
+
+.download-size {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.download-retry[hidden] {
+  display: none;
+}
+
+.download-retry:not([hidden]) {
+  margin-right: auto;
+}
+
+@keyframes download-progress {
+  from { transform: translateX(0); }
+  to { transform: translateX(185%); }
 }
 
 .modal-footer {

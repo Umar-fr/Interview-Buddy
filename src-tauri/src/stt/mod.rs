@@ -1,8 +1,9 @@
 pub mod vad;
 
 use std::fs::{self, File};
-use std::io::copy;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
@@ -13,6 +14,57 @@ const MODEL_BASE_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
 const MODEL_SMALL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+const MODEL_TINY_MIN_BYTES: u64 = 70_000_000;
+const MODEL_BASE_MIN_BYTES: u64 = 130_000_000;
+const MODEL_SMALL_MIN_BYTES: u64 = 430_000_000;
+const GGML_FILE_MAGIC: u32 = 0x67676d6c;
+
+#[derive(Debug, Clone)]
+pub struct ModelDownloadStatus {
+    pub status: &'static str,
+    pub message: String,
+    pub downloaded_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+}
+
+impl ModelDownloadStatus {
+    fn new(status: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            downloaded_bytes: None,
+            total_bytes: None,
+        }
+    }
+
+    fn progress(
+        model_file_name: &str,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    ) -> Self {
+        Self {
+            status: "downloading",
+            message: format!("Downloading Whisper model {}...", model_file_name),
+            downloaded_bytes: Some(downloaded_bytes),
+            total_bytes,
+        }
+    }
+}
+
+fn is_valid_model(path: &Path, minimum_size: u64) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if metadata.len() < minimum_size {
+        return false;
+    }
+
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut magic = [0; 4];
+    file.read_exact(&mut magic).is_ok() && u32::from_le_bytes(magic) == GGML_FILE_MAGIC
+}
 
 fn sanitize_samples(samples: &[f32]) -> Vec<f32> {
     samples
@@ -104,17 +156,14 @@ impl WhisperEngine {
 }
 
 /// Ensure Whisper model is available locally, checking bundled resources or downloading if not present.
-pub fn ensure_model_available<F>(
-    model_choice: Option<&str>,
-    progress_callback: F,
-) -> Result<PathBuf, String>
+pub fn ensure_model_available<F>(model_choice: Option<&str>, progress_callback: F) -> Result<PathBuf, String>
 where
-    F: Fn(&str),
+    F: Fn(ModelDownloadStatus),
 {
-    let (model_file_name, download_url, approx_size) = match model_choice.unwrap_or("base") {
-        "tiny" | "tiny.en" => ("ggml-tiny.bin", MODEL_TINY_URL, "~75 MB"),
-        "base" | "base.en" => ("ggml-base.bin", MODEL_BASE_URL, "~150 MB"),
-        "small" => ("ggml-small.bin", MODEL_SMALL_URL, "~500 MB"),
+    let (model_file_name, download_url, approx_size, minimum_size) = match model_choice.unwrap_or("base") {
+        "tiny" | "tiny.en" => ("ggml-tiny.bin", MODEL_TINY_URL, "~75 MB", MODEL_TINY_MIN_BYTES),
+        "base" | "base.en" => ("ggml-base.bin", MODEL_BASE_URL, "~150 MB", MODEL_BASE_MIN_BYTES),
+        "small" => ("ggml-small.bin", MODEL_SMALL_URL, "~500 MB", MODEL_SMALL_MIN_BYTES),
         model => return Err(format!("Unsupported Whisper model: {}", model)),
     };
 
@@ -129,11 +178,16 @@ where
             ];
             for candidate in candidates {
                 if candidate.exists() {
-                    progress_callback(&format!(
-                        "Loaded pre-bundled Whisper model: {}",
-                        model_file_name
-                    ));
-                    return Ok(candidate);
+                    if is_valid_model(&candidate, minimum_size) {
+                        progress_callback(ModelDownloadStatus::new(
+                            "cached",
+                            format!(
+                                "Using bundled Whisper model at {}.",
+                                candidate.display()
+                            ),
+                        ));
+                        return Ok(candidate);
+                    }
                 }
             }
         }
@@ -160,21 +214,25 @@ where
         }
     }
 
+    if is_valid_model(&model_path, minimum_size) {
+        progress_callback(ModelDownloadStatus::new(
+            "cached",
+            format!("Using downloaded Whisper model at {}.", model_path.display()),
+        ));
+        return Ok(model_path);
+    }
     if model_path.exists() {
-        if let Ok(metadata) = fs::metadata(&model_path) {
-            if metadata.len() > 10_000_000 {
-                progress_callback(&format!(
-                    "Whisper model loaded from local cache: {}",
-                    model_file_name
-                ));
-                return Ok(model_path);
-            }
-        }
+        progress_callback(ModelDownloadStatus::new(
+            "verifying",
+            "Removing an incomplete or invalid cached model before redownloading.",
+        ));
+        fs::remove_file(&model_path)
+            .map_err(|e| format!("Failed to remove invalid cached model: {}", e))?;
     }
 
-    progress_callback(&format!(
-        "Downloading Whisper {} model ({})...",
-        model_file_name, approx_size
+    progress_callback(ModelDownloadStatus::new(
+        "downloading",
+        format!("Connecting to download Whisper {} model ({}).", model_file_name, approx_size),
     ));
 
     let response = ureq::get(download_url)
@@ -188,26 +246,108 @@ where
         ));
     }
 
+    let total_bytes = response
+        .header("Content-Length")
+        .and_then(|length| length.parse::<u64>().ok());
+    if total_bytes.map_or(false, |size| size < minimum_size) {
+        return Err(format!(
+            "Whisper model response is too small ({} bytes); expected at least {} bytes.",
+            total_bytes.unwrap_or_default(),
+            minimum_size
+        ));
+    }
+
     let temp_path = model_dir.join(format!("{}.tmp", model_file_name));
+    if temp_path.exists() {
+        fs::remove_file(&temp_path)
+            .map_err(|e| format!("Failed to remove stale model download: {}", e))?;
+    }
     let mut temp_file =
         File::create(&temp_path).map_err(|e| format!("Failed to create temp model file: {}", e))?;
-
     let mut reader = response.into_reader();
-    copy(&mut reader, &mut temp_file).map_err(|e| format!("Failed to write model file: {}", e))?;
+    let mut downloaded_bytes = 0;
+    let mut last_progress = Instant::now();
+    let mut buffer = [0; 64 * 1024];
+    let download_result = (|| -> Result<(), String> {
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .map_err(|e| format!("Failed to read model download: {}", e))?;
+            if bytes_read == 0 {
+                break;
+            }
+            temp_file
+                .write_all(&buffer[..bytes_read])
+                .map_err(|e| format!("Failed to write model file: {}", e))?;
+            downloaded_bytes += bytes_read as u64;
+            if last_progress.elapsed() >= Duration::from_millis(250) {
+                progress_callback(ModelDownloadStatus::progress(
+                    model_file_name,
+                    downloaded_bytes,
+                    total_bytes,
+                ));
+                last_progress = Instant::now();
+            }
+        }
 
+        temp_file
+            .flush()
+            .map_err(|e| format!("Failed to flush model file: {}", e))?;
+        temp_file
+            .sync_all()
+            .map_err(|e| format!("Failed to sync model file: {}", e))?;
+
+        if total_bytes.map_or(false, |expected| downloaded_bytes != expected) {
+            return Err(format!(
+                "Whisper model download was incomplete (received {} of {} bytes).",
+                downloaded_bytes,
+                total_bytes.unwrap_or_default()
+            ));
+        }
+        if downloaded_bytes < minimum_size {
+            return Err(format!(
+                "Whisper model download is incomplete (received {} bytes; expected at least {}).",
+                downloaded_bytes, minimum_size
+            ));
+        }
+        if !is_valid_model(&temp_path, minimum_size) {
+            return Err("Downloaded file is not a valid Whisper model.".to_string());
+        }
+        Ok(())
+    })();
+
+    drop(temp_file);
+    if let Err(error) = download_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    progress_callback(ModelDownloadStatus::new(
+        "verifying",
+        "Download complete. Verifying model file...",
+    ));
     fs::rename(&temp_path, &model_path)
         .map_err(|e| format!("Failed to finalize model file: {}", e))?;
-
-    progress_callback(&format!(
-        "Whisper {} model downloaded successfully",
-        model_file_name
-    ));
+    progress_callback(ModelDownloadStatus {
+        status: "downloaded",
+        message: format!(
+            "Whisper model {} downloaded and verified at {}.",
+            model_file_name,
+            model_path.display()
+        ),
+        downloaded_bytes: Some(downloaded_bytes),
+        total_bytes: Some(downloaded_bytes),
+    });
     Ok(model_path)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_samples, MODEL_BASE_URL, MODEL_SMALL_URL, MODEL_TINY_URL};
+    use super::{
+        is_valid_model, sanitize_samples, GGML_FILE_MAGIC, MODEL_BASE_URL, MODEL_SMALL_URL,
+        MODEL_TINY_URL,
+    };
+    use std::fs;
 
     #[test]
     fn sanitizes_non_finite_and_out_of_range_audio() {
@@ -228,5 +368,20 @@ mod tests {
         assert!(MODEL_TINY_URL.ends_with("ggml-tiny.bin"));
         assert!(MODEL_BASE_URL.ends_with("ggml-base.bin"));
         assert!(MODEL_SMALL_URL.ends_with("ggml-small.bin"));
+    }
+
+    #[test]
+    fn rejects_truncated_and_non_model_files() {
+        let path = std::env::temp_dir().join(format!(
+            "interview-buddy-invalid-model-{}.bin",
+            std::process::id()
+        ));
+        fs::write(&path, [0; 32]).unwrap();
+        assert!(!is_valid_model(&path, 1));
+
+        let valid_header = GGML_FILE_MAGIC.to_le_bytes().to_vec();
+        fs::write(&path, valid_header).unwrap();
+        assert!(is_valid_model(&path, 4));
+        fs::remove_file(path).unwrap();
     }
 }

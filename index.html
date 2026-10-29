@@ -22,6 +22,7 @@
           <span class="ai-icon">✦</span>
           <span id="ai-badge-label">Gemini AI</span>
         </button>
+        <button id="downloads-btn" class="tool-btn downloads-btn">Downloads</button>
       </div>
 
       <div class="window-controls">
@@ -241,6 +242,41 @@
       </div>
       <div class="modal-footer">
         <button id="whisper-setup-start" class="btn-primary">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="model-download-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="model-download-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon">↓</div>
+          <div>
+            <h2 id="model-download-title" class="modal-title">Speech model download</h2>
+            <p class="modal-subtitle">Whisper models are verified, stored locally, and reused next launch</p>
+          </div>
+        </div>
+        <button id="model-download-close" class="modal-close-btn" aria-label="Close downloads">×</button>
+      </div>
+      <div class="modal-body">
+        <p id="model-download-message" class="download-status-message">No model download in progress.</p>
+        <div
+          id="model-download-progress"
+          class="download-progress-track"
+          role="progressbar"
+          aria-label="Whisper model download progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <div id="model-download-progress-bar" class="download-progress-bar"></div>
+        </div>
+        <div id="model-download-size" class="download-size">Progress will appear here when a model is needed.</div>
+        <p class="form-hint">Wait until the model is ready before playing audio for transcription.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="model-download-retry" class="btn-primary download-retry" hidden>Retry download</button>
+        <button id="model-download-done" class="btn-primary">Done</button>
       </div>
     </div>
   </div>

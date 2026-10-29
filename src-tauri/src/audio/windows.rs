@@ -17,7 +17,7 @@ impl WindowsAudioCapture {
         target_sample_rate: u32,
         target_channels: u32,
     ) -> Result<(Self, Receiver<AudioChunk>, Receiver<(i32, String)>), String> {
-        let (data_tx, data_rx) = channel::<AudioChunk>();
+        let (data_tx, data_rx) = super::audio_chunk_channel();
         let (status_tx, status_rx) = channel::<(i32, String)>();
 
         let is_running = Arc::new(AtomicBool::new(true));
@@ -51,6 +51,11 @@ impl WindowsAudioCapture {
                 let sample_rate = config.sample_rate().0;
                 let channels = config.channels();
                 let sample_format = config.sample_format();
+                if channels == 0 {
+                    let _ = status_tx.send((-1, "Default audio device reported zero channels. Retrying...".to_string()));
+                    thread::sleep(Duration::from_millis(1500));
+                    continue;
+                }
 
                 let _ = status_tx.send((
                     0,
@@ -103,7 +108,7 @@ impl WindowsAudioCapture {
                                         let chunk: Vec<f32> = buffer.drain(0..chunk_size).collect();
                                         if let Ok(mut resampled) = r.process(&[chunk], None) {
                                             if !resampled.is_empty() {
-                                                let _ = tx.send(AudioChunk {
+                                                super::try_send_audio_chunk(&tx, AudioChunk {
                                                     samples: resampled.remove(0),
                                                     sample_rate: target_sample_rate,
                                                     channels: target_channels,
@@ -113,7 +118,7 @@ impl WindowsAudioCapture {
                                     }
                                 } else if !buffer.is_empty() {
                                     let samples = std::mem::take(&mut buffer);
-                                    let _ = tx.send(AudioChunk {
+                                    super::try_send_audio_chunk(&tx, AudioChunk {
                                         samples,
                                         sample_rate: target_sample_rate,
                                         channels: target_channels,
@@ -143,7 +148,7 @@ impl WindowsAudioCapture {
                                         let chunk: Vec<f32> = buffer.drain(0..chunk_size).collect();
                                         if let Ok(mut resampled) = r.process(&[chunk], None) {
                                             if !resampled.is_empty() {
-                                                let _ = tx.send(AudioChunk {
+                                                super::try_send_audio_chunk(&tx, AudioChunk {
                                                     samples: resampled.remove(0),
                                                     sample_rate: target_sample_rate,
                                                     channels: target_channels,
@@ -153,7 +158,7 @@ impl WindowsAudioCapture {
                                     }
                                 } else if !buffer.is_empty() {
                                     let samples = std::mem::take(&mut buffer);
-                                    let _ = tx.send(AudioChunk {
+                                    super::try_send_audio_chunk(&tx, AudioChunk {
                                         samples,
                                         sample_rate: target_sample_rate,
                                         channels: target_channels,
@@ -183,7 +188,7 @@ impl WindowsAudioCapture {
                                         let chunk: Vec<f32> = buffer.drain(0..chunk_size).collect();
                                         if let Ok(mut resampled) = r.process(&[chunk], None) {
                                             if !resampled.is_empty() {
-                                                let _ = tx.send(AudioChunk {
+                                                super::try_send_audio_chunk(&tx, AudioChunk {
                                                     samples: resampled.remove(0),
                                                     sample_rate: target_sample_rate,
                                                     channels: target_channels,
@@ -193,7 +198,7 @@ impl WindowsAudioCapture {
                                     }
                                 } else if !buffer.is_empty() {
                                     let samples = std::mem::take(&mut buffer);
-                                    let _ = tx.send(AudioChunk {
+                                    super::try_send_audio_chunk(&tx, AudioChunk {
                                         samples,
                                         sample_rate: target_sample_rate,
                                         channels: target_channels,

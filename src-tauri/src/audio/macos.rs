@@ -1,5 +1,5 @@
 use std::ffi::{c_char, c_void, CStr};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, SyncSender};
 use super::AudioChunk;
 
 // FFI Declarations matching native/macos_audio_capture.h
@@ -32,7 +32,7 @@ extern "C" {
 }
 
 struct AudioCaptureContext {
-    data_sender: Sender<AudioChunk>,
+    data_sender: SyncSender<AudioChunk>,
     status_sender: Sender<(i32, String)>,
 }
 
@@ -53,7 +53,7 @@ unsafe extern "C" fn on_audio_data(
         sample_rate,
         channels,
     };
-    let _ = context.data_sender.send(chunk);
+    super::try_send_audio_chunk(&context.data_sender, chunk);
 }
 
 unsafe extern "C" fn on_audio_status(
@@ -93,7 +93,7 @@ impl MacOSAudioCapture {
         sample_rate: u32,
         channels: u32,
     ) -> Result<(Self, Receiver<AudioChunk>, Receiver<(i32, String)>), String> {
-        let (data_tx, data_rx) = channel::<AudioChunk>();
+        let (data_tx, data_rx) = super::audio_chunk_channel();
         let (status_tx, status_rx) = channel::<(i32, String)>();
 
         let context = Box::new(AudioCaptureContext {
