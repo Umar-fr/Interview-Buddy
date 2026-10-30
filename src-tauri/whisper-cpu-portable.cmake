@@ -1,0 +1,6 @@
+set(GGML_NATIVE OFF CACHE BOOL "Do not compile for the build runner CPU" FORCE)
+set(GGML_AVX2 ON CACHE BOOL "Use a broadly supported Windows x64 SIMD baseline" FORCE)
+set(GGML_AVX512 OFF CACHE BOOL "Avoid AVX-512 instructions on Windows x64" FORCE)
+set(GGML_AVX512_VBMI OFF CACHE BOOL "Avoid AVX-512 VBMI instructions" FORCE)
+set(GGML_AVX512_VNNI OFF CACHE BOOL "Avoid AVX-512 VNNI instructions" FORCE)
+set(GGML_AVX512_BF16 OFF CACHE BOOL "Avoid AVX-512 BF16 instructions" FORCE)

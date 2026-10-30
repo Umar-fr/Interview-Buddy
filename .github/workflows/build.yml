@@ -15,6 +15,8 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/src-tauri/whisper-cpu-portable.cmake
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +42,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Clean host-specific Whisper build cache
+        run: cargo clean --manifest-path src-tauri/Cargo.toml -p whisper-rs-sys
 
       - name: Run Rust backend tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
