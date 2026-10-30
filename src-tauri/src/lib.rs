@@ -5,10 +5,10 @@ pub mod diagnostics;
 pub mod stt;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, TryRecvError, TrySendError};
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -35,7 +35,8 @@ pub struct TranscriptSegmentEvent {
     pub id: String,
     pub text: String,
     pub is_final: bool,
-    pub timestamp: String,
+    pub timestamp_ms: u64,
+    pub inference_duration_ms: u64,
 }
 
 fn emit_model_status(
@@ -169,7 +170,7 @@ fn start_system_audio_capture(
         "INFO",
         format!(
             "Audio capture requested; model={}, language={}",
-            model_name.as_deref().unwrap_or("base"),
+            model_name.as_deref().unwrap_or("tiny"),
             language.as_deref().unwrap_or("auto")
         ),
     );
@@ -328,8 +329,8 @@ fn start_system_audio_capture(
             }
         };
 
-        let (transcription_tx, transcription_rx) =
-            sync_channel::<stt::vad::SpeechSegment>(2);
+        let transcription_queue = Arc::new(stt::queue::LatestSpeechQueue::default());
+        let transcription_sender = transcription_queue.clone();
         let transcription_running = is_running_flag.clone();
         let transcription_app = app_handle.clone();
         thread::spawn(move || {
@@ -341,18 +342,29 @@ fn start_system_audio_capture(
             let mut whisper_engine = whisper_engine;
             diagnostics::record("INFO", "Whisper transcription worker started");
             while transcription_running.load(Ordering::SeqCst) {
-                match transcription_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(segment) => {
-                        diagnostics::record(
-                            "INFO",
-                            format!("Whisper inference started; samples={}", segment.samples.len()),
-                        );
-                        match whisper_engine.transcribe(&segment.samples) {
+                if let Some(segment) = transcription_queue.recv_timeout(Duration::from_millis(100)) {
+                    let capture_delay_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                        .saturating_sub(segment.timestamp_ms as u128) as u64;
+                    let inference_started = Instant::now();
+                    diagnostics::record(
+                        "INFO",
+                        format!(
+                            "Whisper inference started; samples={}; capture_delay_ms={capture_delay_ms}",
+                            segment.samples.len()
+                        ),
+                    );
+                    match whisper_engine.transcribe(&segment.samples) {
                         Ok(text) if !text.is_empty() => {
-                            let now = chrono_format_time();
+                            let inference_duration_ms = inference_started.elapsed().as_millis() as u64;
                             diagnostics::record(
                                 "INFO",
-                                format!("Whisper inference completed; characters={}", text.chars().count()),
+                                format!(
+                                    "Whisper inference completed; duration_ms={inference_duration_ms}; capture_delay_ms={capture_delay_ms}; characters={}",
+                                    text.chars().count()
+                                ),
                             );
                             let _ = transcription_app.emit(
                                 "transcription-event",
@@ -360,19 +372,25 @@ fn start_system_audio_capture(
                                     id: uuid::Uuid::new_v4().to_string(),
                                     text,
                                     is_final: true,
-                                    timestamp: now,
+                                    timestamp_ms: segment.timestamp_ms,
+                                    inference_duration_ms,
                                 },
                             );
                         }
-                        Ok(_) => {}
+                        Ok(_) => {
+                            diagnostics::record(
+                                "INFO",
+                                format!(
+                                    "Whisper returned no text; duration_ms={}",
+                                    inference_started.elapsed().as_millis()
+                                ),
+                            );
+                        }
                         Err(error) => {
                             eprintln!("[Whisper Inference Error]: {}", error);
                             diagnostics::record("ERROR", format!("Whisper inference failed: {error}"));
                         }
-                        }
                     }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
         });
@@ -443,11 +461,13 @@ fn start_system_audio_capture(
 
                 // Keep audio capture independent from slow Whisper inference.
                 if let Some(segment) = segmenter.process_samples(&samples_16k) {
-                    diagnostics::record(
-                        "INFO",
-                        format!("Speech segment queued; samples={}", segment.samples.len()),
-                    );
-                    if let Err(TrySendError::Full(_)) = transcription_tx.try_send(segment) {
+                    let segment_samples = segment.samples.len();
+                    let replaced_stale = transcription_sender.push(segment);
+                    if replaced_stale {
+                        diagnostics::record(
+                            "WARN",
+                            "Whisper is behind real time; replaced an older queued segment with newer speech",
+                        );
                         if last_overload_notice
                             .map_or(true, |last: Instant| last.elapsed() >= Duration::from_secs(5))
                         {
@@ -461,6 +481,11 @@ fn start_system_audio_capture(
                             );
                             last_overload_notice = Some(Instant::now());
                         }
+                    } else {
+                        diagnostics::record(
+                            "INFO",
+                            format!("Speech segment queued; samples={segment_samples}"),
+                        );
                     }
                 }
             }
@@ -507,18 +532,6 @@ fn stop_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) ->
     Ok("System audio capture stopped".to_string())
 }
 
-fn chrono_format_time() -> String {
-    use std::time::SystemTime;
-    let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let total_secs = duration.as_secs();
-    let secs = total_secs % 60;
-    let mins = (total_secs / 60) % 60;
-    let hours = (total_secs / 3600) % 24;
-    format!("{:02}:{:02}:{:02}", hours, mins, secs)
-}
-
 #[tauri::command]
 fn close_app(app: AppHandle) {
     app.exit(0);
@@ -532,6 +545,21 @@ fn minimize_app(window: WebviewWindow) {
 #[tauri::command]
 fn get_diagnostics() -> Result<diagnostics::DiagnosticLog, String> {
     diagnostics::read()
+}
+
+#[tauri::command]
+fn record_diagnostic(level: String, message: String) -> Result<(), String> {
+    if !matches!(level.as_str(), "INFO" | "WARN" | "ERROR") {
+        return Err("Invalid diagnostic level".to_string());
+    }
+    let message = message
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .replace('\r', " ")
+        .replace('\n', " ");
+    diagnostics::record(&level, message);
+    Ok(())
 }
 
 #[tauri::command]
@@ -647,6 +675,7 @@ pub fn run() {
             close_app,
             minimize_app,
             get_diagnostics,
+            record_diagnostic,
             take_screenshot
         ])
         .setup(|app| {

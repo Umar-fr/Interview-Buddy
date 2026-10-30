@@ -14,6 +14,7 @@ pub struct AudioSegmenter {
     max_speech_samples: usize,
     trailing_silence_samples: usize,
     min_speech_samples: usize,
+    speech_started_at_ms: Option<u64>,
 }
 
 impl AudioSegmenter {
@@ -25,9 +26,10 @@ impl AudioSegmenter {
             buffer: Vec::with_capacity(sample_rate * 5),
             is_speaking: false,
             silence_samples: 0,
-            max_speech_samples: sample_rate * 3 / 2,
-            trailing_silence_samples: sample_rate / 4,
+            max_speech_samples: sample_rate * 8,
+            trailing_silence_samples: sample_rate * 2 / 5,
             min_speech_samples: sample_rate * 3 / 10,
+            speech_started_at_ms: None,
         }
     }
 
@@ -40,6 +42,7 @@ impl AudioSegmenter {
         if energy_detected {
             if !self.is_speaking {
                 self.is_speaking = true;
+                self.speech_started_at_ms = Some(current_time_ms());
             }
             self.silence_samples = 0;
             self.buffer.extend_from_slice(samples);
@@ -62,6 +65,7 @@ impl AudioSegmenter {
     pub fn flush_segment(&mut self) -> Option<SpeechSegment> {
         self.is_speaking = false;
         self.silence_samples = 0;
+        let timestamp_ms = self.speech_started_at_ms.take().unwrap_or_else(current_time_ms);
 
         if self.buffer.len() >= self.min_speech_samples {
             let mut segment_samples = std::mem::take(&mut self.buffer);
@@ -72,11 +76,6 @@ impl AudioSegmenter {
                 segment_samples.resize(min_whisper_len, 0.0);
             }
 
-            let timestamp_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-
             Some(SpeechSegment {
                 samples: segment_samples,
                 timestamp_ms,
@@ -86,6 +85,13 @@ impl AudioSegmenter {
             None
         }
     }
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -103,21 +109,24 @@ mod tests {
         }
         assert!(segmenter.process_samples(&silence).is_none());
         assert!(segmenter.process_samples(&silence).is_none());
+        assert!(segmenter.process_samples(&silence).is_none());
         let segment = segmenter.process_samples(&silence).unwrap();
 
-        assert!(segment.samples.len() >= 16_000 / 10 * 10);
+        assert!(segment.samples.len() >= 16_000);
+        assert!(segment.timestamp_ms > 0);
     }
 
     #[test]
-    fn splits_long_speech_using_audio_duration() {
+    fn keeps_continuous_sentences_together_and_only_splits_after_eight_seconds() {
         let mut segmenter = AudioSegmenter::new(16_000);
         let speech = vec![0.1; 16_000 / 10];
-        let mut segment = None;
 
-        for _ in 0..15 {
-            segment = segmenter.process_samples(&speech);
+        for _ in 0..79 {
+            assert!(segmenter.process_samples(&speech).is_none());
         }
 
+        let segment = segmenter.process_samples(&speech);
         assert!(segment.is_some());
+        assert_eq!(segment.unwrap().samples.len(), 16_000 * 8);
     }
 }

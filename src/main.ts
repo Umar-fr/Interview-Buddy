@@ -103,15 +103,22 @@ const whisperSetupStatus = document.getElementById("whisper-setup-status");
 const STORAGE_KEY_API_KEY = "gemini_api_key";
 const STORAGE_KEY_MODEL = "gemini_model";
 const STORAGE_KEY_WHISPER_MODEL = "whisper_model";
+const WINDOWS_TINY_MIGRATION_KEY = "windows_tiny_model_migration_v1";
 
 let geminiApiKey: string = localStorage.getItem(STORAGE_KEY_API_KEY) || "";
 let selectedModel: string = localStorage.getItem(STORAGE_KEY_MODEL) || "";
 const storedWhisperModel = localStorage.getItem(STORAGE_KEY_WHISPER_MODEL) || "";
+const migratedWindowsToTiny =
+  navigator.userAgent.includes("Windows") &&
+  storedWhisperModel === "base" &&
+  localStorage.getItem(WINDOWS_TINY_MIGRATION_KEY) !== "done";
 let selectedWhisperModel = storedWhisperModel === "tiny.en"
   ? "tiny"
   : storedWhisperModel === "base.en"
     ? "base"
-    : storedWhisperModel;
+    : migratedWindowsToTiny
+      ? "tiny"
+      : storedWhisperModel;
 let selectedWhisperLanguage = localStorage.getItem("whisper_language") || "auto";
 let userResume: string = localStorage.getItem("userResume") || "";
 let audioCaptureStarted = false;
@@ -122,6 +129,12 @@ let modelFileVerified = false;
 interface DiagnosticsPayload {
   path: string;
   contents: string;
+}
+
+function recordDiagnostic(level: "INFO" | "WARN" | "ERROR", message: string) {
+  void invoke("record_diagnostic", { level, message }).catch(() => {
+    console.warn("Could not save an application diagnostic.");
+  });
 }
 
 async function refreshDiagnostics() {
@@ -242,8 +255,8 @@ function saveWhisperPreferences(model: string, language: string) {
   localStorage.setItem(STORAGE_KEY_WHISPER_MODEL, model);
   localStorage.setItem("whisper_language", language);
 
-  if (whisperModelSelect) whisperModelSelect.value = model || "base";
-  if (whisperSetupModelSelect) whisperSetupModelSelect.value = model || "base";
+  if (whisperModelSelect) whisperModelSelect.value = model || "tiny";
+  if (whisperSetupModelSelect) whisperSetupModelSelect.value = model || "tiny";
   if (whisperLanguageSelect) whisperLanguageSelect.value = language;
   if (whisperSetupLanguageSelect) whisperSetupLanguageSelect.value = language;
 
@@ -253,24 +266,39 @@ function saveWhisperPreferences(model: string, language: string) {
 }
 
 if (selectedWhisperModel && !["tiny", "base", "small"].includes(selectedWhisperModel)) {
-  selectedWhisperModel = "base";
+  selectedWhisperModel = "tiny";
 }
 if (!["auto", "en", "hi"].includes(selectedWhisperLanguage)) {
   selectedWhisperLanguage = "auto";
 }
 saveWhisperPreferences(selectedWhisperModel, selectedWhisperLanguage);
-if (whisperSetupModelSelect) whisperSetupModelSelect.value = selectedWhisperModel || "base";
+if (migratedWindowsToTiny) {
+  localStorage.setItem(WINDOWS_TINY_MIGRATION_KEY, "done");
+  recordDiagnostic("INFO", "Migrated the default Windows Whisper model from Base to Tiny for lower transcription latency.");
+}
+if (whisperSetupModelSelect) whisperSetupModelSelect.value = selectedWhisperModel || "tiny";
 if (whisperSetupLanguageSelect) whisperSetupLanguageSelect.value = selectedWhisperLanguage;
 
 whisperModelSelect?.addEventListener("change", () => {
   saveWhisperPreferences(whisperModelSelect.value, whisperLanguageSelect?.value || "auto");
 });
 whisperLanguageSelect?.addEventListener("change", () => {
-  saveWhisperPreferences(whisperModelSelect?.value || "base", whisperLanguageSelect.value);
+  saveWhisperPreferences(whisperModelSelect?.value || "tiny", whisperLanguageSelect.value);
 });
 
 autoAnswerCheckbox?.addEventListener("change", () => {
   localStorage.setItem("auto_answer_enabled", String(autoAnswerCheckbox.checked));
+  if (autoAnswerCheckbox.checked) {
+    recordDiagnostic("INFO", `Auto-Answer enabled; API key configured=${Boolean(geminiApiKey)}; model selected=${Boolean(selectedModel)}.`);
+    if (!geminiApiKey || !selectedModel) {
+      if (statusDetail) statusDetail.textContent = "Auto-Answer needs a connected Gemini API key and model.";
+      openApiKeyModal();
+    } else if (statusDetail) {
+      statusDetail.textContent = "Auto-Answer is listening for questions in the live transcript.";
+    }
+  } else {
+    recordDiagnostic("INFO", "Auto-Answer disabled.");
+  }
 });
 if (autoAnswerCheckbox) {
   autoAnswerCheckbox.checked = localStorage.getItem("auto_answer_enabled") === "true";
@@ -699,7 +727,7 @@ function showModalStatus(msg: string, type: "success" | "error") {
 
 async function startSystemAudioCapture() {
   await invoke("start_system_audio_capture", {
-    modelName: selectedWhisperModel || "base",
+    modelName: selectedWhisperModel || "tiny",
     language: selectedWhisperLanguage,
   });
   audioCaptureStarted = true;
@@ -951,7 +979,7 @@ function isQuestionLike(text: string): boolean {
 
   const questionPatterns = [
     /\b(?:what|why|when|where|who|which|how)\s+(?:is|are|was|were|do|does|did|can|would|should|could|many|much|long|often|you|we)\b/i,
-    /\b(?:tell me|tell us|introduce yourself|explain|describe|walk me through|can you|could you|would you|how would you|what would you|give me an example|define|compare|choose the|select the|correct option|true or false|why should we hire you|your strengths|your weaknesses)\b/i,
+    /\b(?:tell me|tell us|introduce yourself|explain|describe|walk me through|can you|could you|would you|do you|did you|have you|are you|how would you|what would you|give me an example|give an example|define|compare|choose the|select the|correct option|true or false|why should we hire you|your strengths|your weaknesses)\b/i,
     /\b(?:kya|kaise|kyun|kyon|batao|samjhao|batayein)\b/i,
     /(?:क्या|कैसे|क्यों|बताइए|समझाइए)/,
   ];
@@ -960,23 +988,25 @@ function isQuestionLike(text: string): boolean {
 }
 
 function triggerAiQuestionAnswer(questionText: string, isManual = false) {
-  if (!geminiApiKey) {
-    if (isManual || !hasPromptedForGeminiApiKey) {
-      openApiKeyModal();
-    } else if (statusDetail) {
-      statusDetail.textContent = "Configure a Gemini API key to use Auto-Answer.";
+  if (!geminiApiKey || !selectedModel) {
+    recordDiagnostic("WARN", "Auto-Answer could not run because Gemini is not fully configured.");
+    if (statusDetail) {
+      statusDetail.textContent = "Connect a Gemini API key and select a model to use Auto-Answer.";
     }
+    if (isManual || !hasPromptedForGeminiApiKey) openApiKeyModal();
     return;
   }
 
   const now = Date.now();
   // Prevent duplicate query spamming within 8 seconds for the same text
   if (!isManual && textSimilarity(lastAnsweredQuestion, questionText) > 0.45 && now - lastAnsweredTime < 8000) {
+    recordDiagnostic("INFO", "Auto-Answer skipped a duplicate question.");
     return;
   }
 
   lastAnsweredQuestion = questionText;
   lastAnsweredTime = now;
+  recordDiagnostic("INFO", `Sending ${isManual ? "manual" : "detected"} question to Gemini; characters=${questionText.length}.`);
 
   // Remove AI placeholder
   if (aiPlaceholder && aiPlaceholder.parentElement) {
@@ -1063,6 +1093,7 @@ function triggerAiQuestionAnswer(questionText: string, isManual = false) {
     .catch((err) => {
       card.classList.remove("loading");
       cardAnswer.innerHTML = `<span style="color: #f87171;">Error: ${err.message || err}</span>`;
+      recordDiagnostic("ERROR", "Gemini answer request failed; see the error displayed in the answer card.");
     });
 }
 
@@ -1149,7 +1180,8 @@ interface TranscriptSegmentPayload {
   id: string;
   text: string;
   is_final: boolean;
-  timestamp: string;
+  timestamp_ms: number;
+  inference_duration_ms: number;
 }
 
 // Full transcript history for copying and context
@@ -1193,7 +1225,7 @@ listen<ModelStatusPayload>("model-status", (event) => {
 
 // Live transcription event
 listen<TranscriptSegmentPayload>("transcription-event", (event) => {
-  const { text, timestamp } = event.payload;
+  const { text, timestamp_ms, inference_duration_ms } = event.payload;
   const cleanText = text.trim();
 
   if (!cleanText || !transcriptBox) return;
@@ -1207,6 +1239,12 @@ listen<TranscriptSegmentPayload>("transcription-event", (event) => {
     transcriptBox.scrollHeight - transcriptBox.scrollTop <= transcriptBox.clientHeight + 60;
 
   // Add to history
+  const timestamp = new Date(timestamp_ms).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const delaySeconds = Math.max(0, Math.round((Date.now() - timestamp_ms) / 1000));
   transcriptHistory.push({ timestamp, text: cleanText });
 
   // Create entry element
@@ -1218,7 +1256,8 @@ listen<TranscriptSegmentPayload>("transcription-event", (event) => {
 
   const timeEl = document.createElement("span");
   timeEl.className = "entry-time";
-  timeEl.textContent = timestamp || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  timeEl.textContent = `${timestamp} · ${delaySeconds}s delay`;
+  timeEl.title = `Whisper inference took ${(inference_duration_ms / 1000).toFixed(1)}s`;
 
   const askAiBtn = document.createElement("button");
   askAiBtn.className = "btn-ask-entry";
@@ -1247,10 +1286,11 @@ listen<TranscriptSegmentPayload>("transcription-event", (event) => {
   // Check if Auto-Answer is enabled and if this or recent text is a question
   if (autoAnswerCheckbox?.checked) {
     const recentSpeech = transcriptHistory
-      .slice(-2)
+      .slice(-4)
       .map((item) => item.text)
       .join(" ");
     if (isQuestionLike(recentSpeech)) {
+      recordDiagnostic("INFO", `Auto-Answer detected a question; characters=${recentSpeech.length}.`);
       triggerAiQuestionAnswer(recentSpeech, false);
     }
   }

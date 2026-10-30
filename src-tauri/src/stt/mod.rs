@@ -1,4 +1,5 @@
 pub mod vad;
+pub mod queue;
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -77,6 +78,96 @@ fn sanitize_samples(samples: &[f32]) -> Vec<f32> {
             }
         })
         .collect()
+}
+
+fn migrate_cached_models(data_dir: &Path, model_dir: &Path) -> Result<(), String> {
+    let legacy_dirs = [
+        data_dir.join("interview-buddy").join("models"),
+        data_dir.join("system-transcriber").join("models"),
+    ];
+    let models = [
+        ("ggml-tiny.bin", MODEL_TINY_MIN_BYTES),
+        ("ggml-base.bin", MODEL_BASE_MIN_BYTES),
+        ("ggml-small.bin", MODEL_SMALL_MIN_BYTES),
+    ];
+
+    for legacy_dir in &legacy_dirs {
+        for (file_name, minimum_size) in models {
+            let source = legacy_dir.join(file_name);
+            let destination = model_dir.join(file_name);
+            if !source.exists() {
+                continue;
+            }
+
+            if let (Ok(source_path), Ok(destination_path)) =
+                (fs::canonicalize(&source), fs::canonicalize(&destination))
+            {
+                if source_path == destination_path {
+                    continue;
+                }
+            }
+
+            if !is_valid_model(&source, minimum_size) {
+                continue;
+            }
+            if !is_valid_model(&destination, minimum_size) {
+                if destination.exists() {
+                    fs::remove_file(&destination).map_err(|error| {
+                        format!("Failed to replace invalid cached Whisper model: {error}")
+                    })?;
+                }
+                fs::copy(&source, &destination)
+                    .map_err(|error| format!("Failed to migrate Whisper model: {error}"))?;
+                if !is_valid_model(&destination, minimum_size) {
+                    let _ = fs::remove_file(&destination);
+                    return Err(format!("Migrated Whisper model {file_name} failed validation"));
+                }
+            }
+            fs::remove_file(&source)
+                .map_err(|error| format!("Failed to remove migrated Whisper model: {error}"))?;
+        }
+    }
+
+    let canonical_model_dir = fs::canonicalize(model_dir).ok();
+    let canonical_model_parent = model_dir.parent().and_then(|path| fs::canonicalize(path).ok());
+    for legacy_dir in &legacy_dirs {
+        if let (Ok(legacy_path), Some(model_path)) =
+            (fs::canonicalize(legacy_dir), canonical_model_dir.as_ref())
+        {
+            if &legacy_path == model_path {
+                continue;
+            }
+        }
+        if let Some(parent) = legacy_dir.parent() {
+            match fs::remove_dir(legacy_dir) {
+                Ok(()) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        || error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+                Err(error) => {
+                    return Err(format!("Failed to remove old model cache directory: {error}"))
+                }
+            }
+            if let (Ok(parent_path), Some(model_parent)) =
+                (fs::canonicalize(parent), canonical_model_parent.as_ref())
+            {
+                if &parent_path == model_parent {
+                    continue;
+                }
+            }
+            match fs::remove_dir(parent) {
+                Ok(()) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        || error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+                Err(error) => {
+                    return Err(format!("Failed to remove old model cache directory: {error}"))
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub struct WhisperEngine {
@@ -160,7 +251,7 @@ pub fn ensure_model_available<F>(model_choice: Option<&str>, progress_callback: 
 where
     F: Fn(ModelDownloadStatus),
 {
-    let (model_file_name, download_url, approx_size, minimum_size) = match model_choice.unwrap_or("base") {
+    let (model_file_name, download_url, approx_size, minimum_size) = match model_choice.unwrap_or("tiny") {
         "tiny" | "tiny.en" => ("ggml-tiny.bin", MODEL_TINY_URL, "~75 MB", MODEL_TINY_MIN_BYTES),
         "base" | "base.en" => ("ggml-base.bin", MODEL_BASE_URL, "~150 MB", MODEL_BASE_MIN_BYTES),
         "small" => ("ggml-small.bin", MODEL_SMALL_URL, "~500 MB", MODEL_SMALL_MIN_BYTES),
@@ -193,26 +284,16 @@ where
         }
     }
 
-    let base_dir = dirs::data_local_dir()
+    let data_dir = dirs::data_local_dir()
         .or_else(dirs::cache_dir)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let model_dir = base_dir.join("interview-buddy").join("models");
+    let model_dir = data_dir.join("InterviewBuddy").join("models");
     fs::create_dir_all(&model_dir)
         .map_err(|e| format!("Failed to create model directory: {}", e))?;
+    migrate_cached_models(&data_dir, &model_dir)?;
 
     let model_path = model_dir.join(model_file_name);
-
-    // Check if legacy system-transcriber directory has it
-    if !model_path.exists() {
-        let legacy_model = base_dir
-            .join("system-transcriber")
-            .join("models")
-            .join(model_file_name);
-        if legacy_model.exists() {
-            let _ = fs::copy(&legacy_model, &model_path);
-        }
-    }
 
     if is_valid_model(&model_path, minimum_size) {
         progress_callback(ModelDownloadStatus::new(

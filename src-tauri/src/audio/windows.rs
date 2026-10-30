@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use rubato::{Resampler, FastFixedIn, PolynomialDegree};
 use super::AudioChunk;
 
 pub struct WindowsAudioCapture {
@@ -32,8 +31,8 @@ impl Drop for CaptureWorkerPanicGuard {
 
 impl WindowsAudioCapture {
     pub fn start(
-        target_sample_rate: u32,
-        target_channels: u32,
+        _target_sample_rate: u32,
+        _target_channels: u32,
     ) -> Result<(Self, Receiver<AudioChunk>, Receiver<(i32, String)>), String> {
         crate::diagnostics::record("INFO", "Initializing Windows loopback audio capture");
         let (data_tx, data_rx) = super::audio_chunk_channel();
@@ -104,25 +103,11 @@ impl WindowsAudioCapture {
                     stream_err_flag_clone.store(true, Ordering::SeqCst);
                 };
 
-                let chunk_size = 1024;
-                let resampler_res = if sample_rate != target_sample_rate && sample_rate > 0 {
-                    FastFixedIn::<f32>::new(
-                        target_sample_rate as f64 / sample_rate as f64,
-                        2.0,
-                        PolynomialDegree::Cubic,
-                        chunk_size,
-                        1,
-                    ).ok()
-                } else {
-                    None
-                };
-
                 let tx = data_tx.clone();
                 let is_running_stream = is_running_clone.clone();
 
                 let stream_result = match sample_format {
                     cpal::SampleFormat::F32 => {
-                        let mut resampler = resampler_res;
                         let mut buffer: Vec<f32> = Vec::new();
                         device.build_input_stream(
                             &config.into(),
@@ -135,25 +120,12 @@ impl WindowsAudioCapture {
                                     buffer.push(sum / (channels as f32));
                                 }
 
-                                if let Some(ref mut r) = resampler {
-                                    while buffer.len() >= chunk_size {
-                                        let chunk: Vec<f32> = buffer.drain(0..chunk_size).collect();
-                                        if let Ok(mut resampled) = r.process(&[chunk], None) {
-                                            if !resampled.is_empty() {
-                                                super::try_send_audio_chunk(&tx, AudioChunk {
-                                                    samples: resampled.remove(0),
-                                                    sample_rate: target_sample_rate,
-                                                    channels: target_channels,
-                                                });
-                                            }
-                                        }
-                                    }
-                                } else if !buffer.is_empty() {
+                                if !buffer.is_empty() {
                                     let samples = std::mem::take(&mut buffer);
                                     super::try_send_audio_chunk(&tx, AudioChunk {
                                         samples,
-                                        sample_rate: target_sample_rate,
-                                        channels: target_channels,
+                                        sample_rate,
+                                        channels: 1,
                                     });
                                 }
                             },
@@ -162,7 +134,6 @@ impl WindowsAudioCapture {
                         )
                     }
                     cpal::SampleFormat::I16 => {
-                        let mut resampler = resampler_res;
                         let mut buffer: Vec<f32> = Vec::new();
                         device.build_input_stream(
                             &config.into(),
@@ -175,25 +146,12 @@ impl WindowsAudioCapture {
                                     buffer.push(sum / (channels as f32));
                                 }
 
-                                if let Some(ref mut r) = resampler {
-                                    while buffer.len() >= chunk_size {
-                                        let chunk: Vec<f32> = buffer.drain(0..chunk_size).collect();
-                                        if let Ok(mut resampled) = r.process(&[chunk], None) {
-                                            if !resampled.is_empty() {
-                                                super::try_send_audio_chunk(&tx, AudioChunk {
-                                                    samples: resampled.remove(0),
-                                                    sample_rate: target_sample_rate,
-                                                    channels: target_channels,
-                                                });
-                                            }
-                                        }
-                                    }
-                                } else if !buffer.is_empty() {
+                                if !buffer.is_empty() {
                                     let samples = std::mem::take(&mut buffer);
                                     super::try_send_audio_chunk(&tx, AudioChunk {
                                         samples,
-                                        sample_rate: target_sample_rate,
-                                        channels: target_channels,
+                                        sample_rate,
+                                        channels: 1,
                                     });
                                 }
                             },
@@ -202,7 +160,6 @@ impl WindowsAudioCapture {
                         )
                     }
                     cpal::SampleFormat::I32 => {
-                        let mut resampler = resampler_res;
                         let mut buffer: Vec<f32> = Vec::new();
                         device.build_input_stream(
                             &config.into(),
@@ -215,25 +172,12 @@ impl WindowsAudioCapture {
                                     buffer.push(sum / (channels as f32));
                                 }
 
-                                if let Some(ref mut r) = resampler {
-                                    while buffer.len() >= chunk_size {
-                                        let chunk: Vec<f32> = buffer.drain(0..chunk_size).collect();
-                                        if let Ok(mut resampled) = r.process(&[chunk], None) {
-                                            if !resampled.is_empty() {
-                                                super::try_send_audio_chunk(&tx, AudioChunk {
-                                                    samples: resampled.remove(0),
-                                                    sample_rate: target_sample_rate,
-                                                    channels: target_channels,
-                                                });
-                                            }
-                                        }
-                                    }
-                                } else if !buffer.is_empty() {
+                                if !buffer.is_empty() {
                                     let samples = std::mem::take(&mut buffer);
                                     super::try_send_audio_chunk(&tx, AudioChunk {
                                         samples,
-                                        sample_rate: target_sample_rate,
-                                        channels: target_channels,
+                                        sample_rate,
+                                        channels: 1,
                                     });
                                 }
                             },

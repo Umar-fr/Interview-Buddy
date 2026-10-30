@@ -161,12 +161,12 @@
         <div class="form-group" style="margin-top: 6px;">
           <label for="whisper-model-select">Offline Speech-to-Text Model (Whisper)</label>
           <select id="whisper-model-select" style="width: 100%; padding: 7px 10px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: #fff; font-size: 12px; outline: none;">
-            <option value="tiny">Tiny multilingual (~75 MB) - Fastest, lower accuracy</option>
-            <option value="base">Base multilingual (~150 MB) - Balanced (recommended)</option>
+            <option value="tiny">Tiny multilingual (~75 MB) - Fastest (recommended for Windows)</option>
+            <option value="base">Base multilingual (~150 MB) - Balanced accuracy and speed</option>
             <option value="small">Small multilingual (~500 MB) - Higher accuracy, slower</option>
           </select>
           <span class="form-hint">
-            Multilingual models support English, Hindi, and mixed Hinglish. A model change applies after restarting the app.
+            Multilingual models support English, Hindi, and mixed Hinglish. Tiny is recommended for faster live captions on Windows; larger models may take much longer on CPU. A model change applies after restarting the app.
           </span>
         </div>
 
@@ -225,8 +225,8 @@
         <div class="form-group">
           <label for="whisper-setup-model">Whisper model</label>
           <select id="whisper-setup-model">
-            <option value="tiny">Tiny multilingual (~75 MB) — fastest, lower accuracy</option>
-            <option value="base" selected>Base multilingual (~150 MB) — balanced, recommended</option>
+            <option value="tiny" selected>Tiny multilingual (~75 MB) — fastest, recommended for Windows</option>
+            <option value="base">Base multilingual (~150 MB) — balanced accuracy and speed</option>
             <option value="small">Small multilingual (~500 MB) — higher accuracy, slower</option>
           </select>
         </div>
@@ -238,7 +238,7 @@
             <option value="hi">Hindi</option>
           </select>
         </div>
-        <p class="form-hint">The selected model downloads once on first use. Audio transcription runs locally; audio is not sent to Gemini unless you enable AI features.</p>
+        <p class="form-hint">The selected model downloads once on first use. Tiny is recommended for faster live captions on Windows. Audio transcription runs locally; audio is not sent to Gemini unless you enable AI features.</p>
         <div id="whisper-setup-status" class="modal-status-msg hidden"></div>
       </div>
       <div class="modal-footer">
