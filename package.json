@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:app": "tauri build",
-    "build:windows": "set \"CMAKE_GENERATOR=Visual Studio 17 2022\" && set \"CMAKE_TOOLCHAIN_FILE=%CD%\\src-tauri\\whisper-cpu-portable.cmake\" && node scripts/prepare-vulkan-loader.js && tauri build --bundles nsis --config src-tauri/tauri.windows.conf.json"
+    "build:windows": "set \"CMAKE_TOOLCHAIN_FILE=%CD%\\src-tauri\\whisper-cpu-portable.cmake\" && node scripts/prepare-vulkan-loader.js && tauri build --bundles nsis --config src-tauri/tauri.windows.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",
