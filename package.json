@@ -1,7 +1,7 @@
 {
   "name": "interview-buddy",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:app": "tauri build",
-    "build:windows": "tauri build --bundles nsis"
+    "build:windows": "set \"CMAKE_GENERATOR=Visual Studio 17 2022\" && set \"CMAKE_TOOLCHAIN_FILE=%CD%\\src-tauri\\whisper-cpu-portable.cmake\" && node scripts/prepare-vulkan-loader.js && tauri build --bundles nsis --config src-tauri/tauri.windows.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",

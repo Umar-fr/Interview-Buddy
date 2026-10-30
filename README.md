@@ -6,16 +6,16 @@ InterviewBuddy is a desktop app for live system-audio transcription and optional
 
 | Platform | Download |
 | --- | --- |
-| Windows 10/11 (x64) | [Download installer](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.7_x64-setup.exe) |
-| macOS (Intel) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.7_x64.dmg) |
-| macOS (Apple Silicon) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.7_aarch64.dmg) |
+| Windows 10/11 (x64) | [Download installer](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.8_x64-setup.exe) |
+| macOS (Intel) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.8_x64.dmg) |
+| macOS (Apple Silicon) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.8_aarch64.dmg) |
 
-These links will work after the `v0.1.7` release is published. For earlier versions, visit [All Releases](https://github.com/Umar-fr/Interview-Buddy/releases).
+These links will work after the `v0.1.8` release is published. For earlier versions, visit [All Releases](https://github.com/Umar-fr/Interview-Buddy/releases).
 
 ### Installation notes
 
-- **Windows:** Run the downloaded installer on a 64-bit PC with an AVX2-capable processor. It installs per-user and downloads WebView2 if it is missing. Windows SmartScreen may show a warning because the installer is not signed.
-- **macOS:** Open the DMG and drag InterviewBuddy into Applications. The app is unsigned and may require Control-click → **Open** the first time. macOS 13 or later is required.
+- **Windows:** Run the downloaded installer on a 64-bit PC with an AVX2-capable processor and a Vulkan-capable graphics driver for GPU acceleration. It installs per-user and downloads WebView2 if it is missing. CPU transcription remains available when no Vulkan GPU is detected. Windows SmartScreen may show a warning because the installer is not signed.
+- **macOS:** Open the DMG and drag InterviewBuddy into Applications. Whisper uses Metal GPU acceleration when available and falls back to CPU if initialization fails. The app is unsigned and may require Control-click → **Open** the first time. macOS 13 or later is required.
 - **First launch:** Choose a multilingual Whisper model (Tiny ~75 MB, Base ~150 MB, or Small ~500 MB) and a transcription language. Tiny is recommended for responsive live transcription on Windows; Windows users with the previous default Base model are moved to Tiny once. Model and language changes can be applied while audio capture continues; existing transcript history is kept. The **Downloads** button shows download progress; models are verified and cached under `%LOCALAPPDATA%\InterviewBuddy\models`. An internet connection is required for the initial download.
 - **Transcription languages:** Auto-detect is recommended for speech that mixes Hindi and English. Results vary with audio quality and code-switching.
 - **AI answers:** Add your own Gemini API key in the app settings. Speech transcription runs locally; Gemini features send the text you choose to process to Google.
@@ -37,7 +37,7 @@ These links will work after the `v0.1.7` release is published. For earlier versi
 - **No audio detected:** Check that sound is playing through the default output device. On macOS, grant Screen & System Audio Recording permission in System Settings.
 - **First transcription takes time:** The Whisper model downloads on first use; subsequent launches use the local copy.
 - **Model download status:** Open **Downloads** to see progress, verification, or a retry option if the model download fails.
-- **Slow or delayed transcription:** Open the Whisper model settings and select Tiny for the fastest CPU transcription. Speech is emitted in shorter chunks to reduce the wait for the first result. Offline Whisper runs in batches, so true zero-latency captions are not possible; on slower CPUs inference can still fall behind and skip older queued segments to avoid an ever-growing delay.
+- **Slow or delayed transcription:** Select Tiny for the fastest transcription. Windows uses a detected Vulkan GPU when available (discrete adapters are prioritized by the backend); macOS uses Metal. CPU inference is used when no GPU is detected or GPU initialization/inference fails. For English-only audio, choose English instead of Auto to avoid repeated language detection; keep Auto for Hinglish. Whisper processes audio in batches, so captions cannot be truly zero-latency. If inference takes longer than the audio segment, the app replaces older queued speech with newer speech to prevent an ever-growing backlog; check Logs for inference time, total delay, backend, and real-time factor.
 - **Audio or transcription stops unexpectedly:** Open **Logs**, select and copy the diagnostics, then share them with your bug report. The log does not include recorded audio or transcript text; review it before sharing.
 - **Gemini answers are unavailable:** Confirm that your Gemini API key and selected model are valid. Transcription does not require a Gemini key.
 
@@ -52,7 +52,7 @@ npm ci
 npm run tauri dev
 ```
 
-To run the Rust tests on Windows with Visual Studio 2026, open its x64 Developer Command Prompt and run:
+To run the Rust tests on Windows with Visual Studio 2026, Vulkan SDK, and Ninja, open its x64 Developer Command Prompt and run:
 
 ```bat
 set "CMAKE_GENERATOR=Ninja"

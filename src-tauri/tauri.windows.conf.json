@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "vulkan-runtime/vulkan-1.dll": "vulkan-1.dll",
+      "vulkan-runtime/LICENSE.txt": "Vulkan-Loader-LICENSE.txt"
+    }
+  }
+}

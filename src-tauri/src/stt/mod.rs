@@ -19,6 +19,13 @@ const MODEL_TINY_MIN_BYTES: u64 = 70_000_000;
 const MODEL_BASE_MIN_BYTES: u64 = 130_000_000;
 const MODEL_SMALL_MIN_BYTES: u64 = 430_000_000;
 const GGML_FILE_MAGIC: u32 = 0x67676d6c;
+const MAX_WHISPER_THREADS: usize = 4;
+
+fn whisper_thread_count(available_threads: Option<usize>) -> i32 {
+    available_threads
+        .unwrap_or(2)
+        .clamp(1, MAX_WHISPER_THREADS) as i32
+}
 
 #[derive(Debug, Clone)]
 pub struct ModelDownloadStatus {
@@ -174,76 +181,189 @@ pub struct WhisperEngine {
     state: WhisperState,
     _ctx: WhisperContext,
     language: Option<String>,
+    n_threads: i32,
+    model_path: PathBuf,
+    using_gpu: bool,
+    backend: String,
 }
 
 impl WhisperEngine {
     /// Initialize Whisper context and persistent state from the model path
     pub fn new(model_path: &Path, language: Option<String>) -> Result<Self, String> {
-        let path_str = model_path
-            .to_str()
-            .ok_or_else(|| "Invalid model path unicode".to_string())?;
-
-        let mut params = WhisperContextParameters::default();
-        params.use_gpu(cfg!(target_os = "macos"));
-
-        let ctx = WhisperContext::new_with_params(path_str, params)
-            .map_err(|e| format!("Failed to load Whisper model: {:?}", e))?;
-
-        let state = ctx
-            .create_state()
-            .map_err(|e| format!("Failed to create persistent Whisper state: {:?}", e))?;
+        let model_path = model_path.to_path_buf();
+        let detected_gpu = detected_gpu_backend();
+        let (ctx, state, using_gpu, backend) = if let Some(backend) = detected_gpu {
+            match create_whisper_context(&model_path, true) {
+                Ok((ctx, state)) => {
+                    crate::diagnostics::record(
+                        "INFO",
+                        format!("Whisper GPU acceleration enabled; backend={backend}"),
+                    );
+                    (ctx, state, true, backend)
+                }
+                Err(gpu_error) => {
+                    crate::diagnostics::record(
+                        "WARN",
+                        format!("Whisper GPU initialization failed; falling back to CPU: {gpu_error}"),
+                    );
+                    let (ctx, state) = create_whisper_context(&model_path, false)?;
+                    (ctx, state, false, "CPU (GPU initialization fallback)".to_string())
+                }
+            }
+        } else {
+            crate::diagnostics::record(
+                "INFO",
+                "No supported Whisper GPU detected; using CPU inference",
+            );
+            let (ctx, state) = create_whisper_context(&model_path, false)?;
+            (ctx, state, false, "CPU".to_string())
+        };
 
         Ok(Self {
             state,
             _ctx: ctx,
             language,
+            n_threads: whisper_thread_count(
+                std::thread::available_parallelism()
+                    .ok()
+                    .map(|parallelism| parallelism.get()),
+            ),
+            model_path,
+            using_gpu,
+            backend,
         })
+    }
+
+    pub fn n_threads(&self) -> i32 {
+        self.n_threads
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.backend
     }
 
     /// Transcribe 16kHz mono PCM float samples rapidly
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(self.language.as_deref());
-        params.set_translate(false);
-        params.set_no_context(true);
-        params.set_single_segment(true);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_suppress_blank(true);
-
-        let n_threads = std::thread::available_parallelism()
-            .map(|p| (p.get() as i32).clamp(1, 8))
-            .unwrap_or(2);
-        params.set_n_threads(n_threads);
-
-        // Anti-hallucination filters
-        params.set_entropy_thold(2.4);
-        params.set_logprob_thold(-1.0);
-        params.set_no_speech_thold(0.6);
-        params.set_initial_prompt(
-            "The speaker may switch between Hindi and English; preserve English technical terms.",
-        );
-
-        self.state
-            .full(params, &sanitize_samples(samples))
-            .map_err(|e| format!("Whisper inference error: {:?}", e))?;
-
-        let num_segments = self
-            .state
-            .full_n_segments()
-            .map_err(|e| format!("Failed to count segments: {:?}", e))?;
-
-        let mut full_text = String::new();
-        for i in 0..num_segments {
-            if let Ok(segment) = self.state.full_get_segment_text(i) {
-                full_text.push_str(&segment);
+        let samples = sanitize_samples(samples);
+        match run_transcription(&mut self.state, &samples, self.language.as_deref(), self.n_threads)
+        {
+            Ok(text) => Ok(text),
+            Err(gpu_error) if self.using_gpu => {
+                crate::diagnostics::record(
+                    "WARN",
+                    format!("Whisper GPU inference failed; retrying on CPU: {gpu_error}"),
+                );
+                let (ctx, state) = create_whisper_context(&self.model_path, false).map_err(
+                    |cpu_error| {
+                        format!(
+                            "Whisper GPU inference failed ({gpu_error}); CPU fallback initialization failed: {cpu_error}"
+                        )
+                    },
+                )?;
+                self._ctx = ctx;
+                self.state = state;
+                self.using_gpu = false;
+                self.backend = "CPU (GPU inference fallback)".to_string();
+                crate::diagnostics::record(
+                    "INFO",
+                    "Whisper switched to CPU inference after a GPU inference error",
+                );
+                run_transcription(
+                    &mut self.state,
+                    &samples,
+                    self.language.as_deref(),
+                    self.n_threads,
+                )
+                .map_err(|cpu_error| {
+                    format!(
+                        "Whisper GPU inference failed ({gpu_error}); CPU fallback inference failed: {cpu_error}"
+                    )
+                })
             }
+            Err(error) => Err(error),
         }
-
-        Ok(full_text.trim().to_string())
     }
+}
+
+fn create_whisper_context(
+    model_path: &Path,
+    use_gpu: bool,
+) -> Result<(WhisperContext, WhisperState), String> {
+    let path_str = model_path
+        .to_str()
+        .ok_or_else(|| "Invalid model path unicode".to_string())?;
+    let mut params = WhisperContextParameters::default();
+    params.use_gpu(use_gpu);
+    let ctx = WhisperContext::new_with_params(path_str, params)
+        .map_err(|error| format!("Failed to load Whisper model: {error:?}"))?;
+    let state = ctx
+        .create_state()
+        .map_err(|error| format!("Failed to create persistent Whisper state: {error:?}"))?;
+    Ok((ctx, state))
+}
+
+fn detected_gpu_backend() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let devices = whisper_rs::vulkan::list_devices();
+        if !devices.is_empty() {
+            return Some(format!(
+                "Vulkan ({})",
+                devices
+                    .iter()
+                    .map(|device| device.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Some("Metal".to_string());
+    }
+
+    None
+}
+
+fn run_transcription(
+    state: &mut WhisperState,
+    samples: &[f32],
+    language: Option<&str>,
+    n_threads: i32,
+) -> Result<String, String> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_language(language);
+    params.set_translate(false);
+    params.set_no_context(true);
+    params.set_single_segment(true);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_suppress_blank(true);
+    params.set_n_threads(n_threads);
+    params.set_entropy_thold(2.4);
+    params.set_logprob_thold(-1.0);
+    params.set_no_speech_thold(0.6);
+    params.set_initial_prompt(
+        "The speaker may switch between Hindi and English; preserve English technical terms.",
+    );
+
+    state
+        .full(params, samples)
+        .map_err(|error| format!("Whisper inference error: {error:?}"))?;
+
+    let num_segments = state
+        .full_n_segments()
+        .map_err(|error| format!("Failed to count segments: {error:?}"))?;
+    let mut full_text = String::new();
+    for i in 0..num_segments {
+        if let Ok(segment) = state.full_get_segment_text(i) {
+            full_text.push_str(&segment);
+        }
+    }
+    Ok(full_text.trim().to_string())
 }
 
 /// Ensure Whisper model is available locally, checking bundled resources or downloading if not present.
@@ -425,8 +545,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        is_valid_model, sanitize_samples, GGML_FILE_MAGIC, MODEL_BASE_URL, MODEL_SMALL_URL,
-        MODEL_TINY_URL,
+        is_valid_model, sanitize_samples, whisper_thread_count, GGML_FILE_MAGIC, MODEL_BASE_URL,
+        MODEL_SMALL_URL, MODEL_TINY_URL,
     };
     use std::fs;
 
@@ -438,6 +558,14 @@ mod tests {
             sanitize_samples(&samples),
             vec![0.0, 0.0, 0.0, -1.0, 0.5, 1.0]
         );
+    }
+
+    #[test]
+    fn caps_whisper_threads_to_avoid_logical_core_oversubscription() {
+        assert_eq!(whisper_thread_count(None), 2);
+        assert_eq!(whisper_thread_count(Some(0)), 1);
+        assert_eq!(whisper_thread_count(Some(4)), 4);
+        assert_eq!(whisper_thread_count(Some(8)), 4);
     }
 
     #[test]

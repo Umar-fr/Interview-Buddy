@@ -433,22 +433,35 @@ fn start_system_audio_capture(
                         .unwrap_or_default()
                         .as_millis()
                         .saturating_sub(segment.timestamp_ms as u128) as u64;
+                    let segment_audio_ms =
+                        (segment.samples.len() as u64).saturating_mul(1000) / 16_000;
+                    let inference_threads = whisper_engine.n_threads();
+                    let inference_backend = whisper_engine.backend();
                     let inference_started = Instant::now();
                     diagnostics::record(
                         "INFO",
                         format!(
-                            "Whisper inference started; samples={}; capture_delay_ms={capture_delay_ms}",
-                            segment.samples.len()
+                            "Whisper inference started; samples={}; audio_ms={segment_audio_ms}; threads={inference_threads}; backend={inference_backend}; capture_delay_ms={capture_delay_ms}",
+                            segment.samples.len(),
                         ),
                     );
-                    match whisper_engine.transcribe(&segment.samples) {
+                    let transcription_result = whisper_engine.transcribe(&segment.samples);
+                    let inference_duration_ms = inference_started.elapsed().as_millis() as u64;
+                    let total_delay_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                        .saturating_sub(segment.timestamp_ms as u128)
+                        as u64;
+                    let realtime_factor =
+                        inference_duration_ms as f64 / segment_audio_ms.max(1) as f64;
+                    match transcription_result {
                         Ok(text) if !text.is_empty() => {
-                            let inference_duration_ms = inference_started.elapsed().as_millis() as u64;
                             diagnostics::record(
                                 "INFO",
                                 format!(
-                                    "Whisper inference completed; duration_ms={inference_duration_ms}; capture_delay_ms={capture_delay_ms}; characters={}",
-                                    text.chars().count()
+                                    "Whisper inference completed; duration_ms={inference_duration_ms}; total_delay_ms={total_delay_ms}; realtime_factor={realtime_factor:.2}; characters={}",
+                                    text.chars().count(),
                                 ),
                             );
                             let _ = transcription_app.emit(
@@ -466,14 +479,18 @@ fn start_system_audio_capture(
                             diagnostics::record(
                                 "INFO",
                                 format!(
-                                    "Whisper returned no text; duration_ms={}",
-                                    inference_started.elapsed().as_millis()
+                                    "Whisper returned no text; duration_ms={inference_duration_ms}; total_delay_ms={total_delay_ms}; realtime_factor={realtime_factor:.2}"
                                 ),
                             );
                         }
                         Err(error) => {
                             eprintln!("[Whisper Inference Error]: {}", error);
-                            diagnostics::record("ERROR", format!("Whisper inference failed: {error}"));
+                            diagnostics::record(
+                                "ERROR",
+                                format!(
+                                    "Whisper inference failed: {error}; duration_ms={inference_duration_ms}; total_delay_ms={total_delay_ms}; realtime_factor={realtime_factor:.2}"
+                                ),
+                            );
                         }
                     }
                     apply_ready_model_switches(
