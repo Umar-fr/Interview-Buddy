@@ -4,8 +4,8 @@ pub mod audio;
 pub mod diagnostics;
 pub mod stt;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::TryRecvError;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -39,6 +39,12 @@ pub struct TranscriptSegmentEvent {
     pub inference_duration_ms: u64,
 }
 
+struct LoadedWhisperModel {
+    generation: u64,
+    model_name: String,
+    engine: stt::WhisperEngine,
+}
+
 fn emit_model_status(
     app: &AppHandle,
     status: &str,
@@ -66,6 +72,10 @@ fn stop_capture_after_model_error(app: &AppHandle, is_running: &AtomicBool, mess
     diagnostics::record("ERROR", message);
     is_running.store(false, Ordering::SeqCst);
     let state = app.state::<AppAudioState>();
+    state.model_switch_generation.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut switch_tx) = state.model_switch_tx.lock() {
+        *switch_tx = None;
+    }
     #[cfg(target_os = "macos")]
     if let Ok(mut session) = state.session_mac.lock() {
         *session = None;
@@ -145,6 +155,9 @@ pub struct AppAudioState {
     #[cfg(target_os = "windows")]
     session_win: Mutex<Option<audio::windows::WindowsAudioCapture>>,
     is_running: Arc<AtomicBool>,
+    model_switch_tx: Mutex<Option<Sender<LoadedWhisperModel>>>,
+    model_switch_generation: Arc<AtomicU64>,
+    model_load_lock: Arc<Mutex<()>>,
 }
 
 impl Default for AppAudioState {
@@ -155,6 +168,41 @@ impl Default for AppAudioState {
             #[cfg(target_os = "windows")]
             session_win: Mutex::new(None),
             is_running: Arc::new(AtomicBool::new(false)),
+            model_switch_tx: Mutex::new(None),
+            model_switch_generation: Arc::new(AtomicU64::new(0)),
+            model_load_lock: Arc::new(Mutex::new(())),
+        }
+    }
+}
+
+fn apply_ready_model_switches(
+    receiver: &Receiver<LoadedWhisperModel>,
+    generation: &AtomicU64,
+    app: &AppHandle,
+    engine: &mut stt::WhisperEngine,
+) {
+    loop {
+        match receiver.try_recv() {
+            Ok(model) if model.generation == generation.load(Ordering::SeqCst) => {
+                let model_name = model.model_name;
+                *engine = model.engine;
+                diagnostics::record(
+                    "INFO",
+                    format!("Switched active Whisper model to {model_name}"),
+                );
+                emit_model_status(
+                    app,
+                    "ready",
+                    format!("Whisper {model_name} model is active."),
+                    None,
+                    None,
+                );
+            }
+            Ok(_) => diagnostics::record(
+                "INFO",
+                "Ignored a Whisper model switch superseded by a newer selection",
+            ),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
         }
     }
 }
@@ -212,6 +260,17 @@ fn start_system_audio_capture(
     return Err("Audio capture not yet supported on this OS".to_string());
 
     state.is_running.store(true, Ordering::SeqCst);
+    let initial_model_generation = state
+        .model_switch_generation
+        .fetch_add(1, Ordering::SeqCst)
+        .saturating_add(1);
+    let model_switch_generation = state.model_switch_generation.clone();
+    let model_load_lock = state.model_load_lock.clone();
+    let (model_switch_tx, model_switch_rx) = channel();
+    *state
+        .model_switch_tx
+        .lock()
+        .map_err(|error| error.to_string())? = Some(model_switch_tx);
     let is_running_flag = state.is_running.clone();
     let app_handle = app.clone();
     diagnostics::record("INFO", "Audio capture backend started");
@@ -238,20 +297,28 @@ fn start_system_audio_capture(
             None,
         );
 
+        let _model_load_guard = model_load_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let app_handle_download = app_handle.clone();
+        let initial_status_generation = model_switch_generation.clone();
         let model_choice = model_name.as_deref();
         let model_path = match stt::ensure_model_available(model_choice, move |status| {
             println!("[Whisper Model]: {}", status.message);
-            if status.status != "downloading" {
+            if status.status != "downloading"
+                && initial_status_generation.load(Ordering::SeqCst) == initial_model_generation
+            {
                 diagnostics::record("INFO", format!("Whisper model status: {}", status.status));
             }
-            emit_model_status(
-                &app_handle_download,
-                status.status,
-                status.message,
-                status.downloaded_bytes,
-                status.total_bytes,
-            );
+            if initial_status_generation.load(Ordering::SeqCst) == initial_model_generation {
+                emit_model_status(
+                    &app_handle_download,
+                    status.status,
+                    status.message,
+                    status.downloaded_bytes,
+                    status.total_bytes,
+                );
+            }
         }) {
             Ok(path) => path,
             Err(err) => {
@@ -273,13 +340,15 @@ fn start_system_audio_capture(
             }
         };
 
-        emit_model_status(
-            &app_handle,
-            "loading",
-            "Loading Whisper model into memory...".to_string(),
-            None,
-            None,
-        );
+        if model_switch_generation.load(Ordering::SeqCst) == initial_model_generation {
+            emit_model_status(
+                &app_handle,
+                "loading",
+                "Loading Whisper model into memory...".to_string(),
+                None,
+                None,
+            );
+        }
         let language = match language.as_deref() {
             Some("en") => Some("en".to_string()),
             Some("hi") => Some("hi".to_string()),
@@ -301,13 +370,15 @@ fn start_system_audio_capture(
             Ok(engine) => {
                 println!("[Whisper]: Engine initialized successfully");
                 diagnostics::record("INFO", "Whisper engine initialized successfully");
-                emit_model_status(
-                    &app_handle,
-                    "ready",
-                    "Whisper model ready (offline).".to_string(),
-                    None,
-                    None,
-                );
+                if model_switch_generation.load(Ordering::SeqCst) == initial_model_generation {
+                    emit_model_status(
+                        &app_handle,
+                        "ready",
+                        "Whisper model ready (offline).".to_string(),
+                        None,
+                        None,
+                    );
+                }
                 engine
             }
             Err(err) => {
@@ -328,11 +399,13 @@ fn start_system_audio_capture(
                 return;
             }
         };
+        drop(_model_load_guard);
 
         let transcription_queue = Arc::new(stt::queue::LatestSpeechQueue::default());
         let transcription_sender = transcription_queue.clone();
         let transcription_running = is_running_flag.clone();
         let transcription_app = app_handle.clone();
+        let transcription_generation = model_switch_generation.clone();
         thread::spawn(move || {
             let _panic_guard = AudioWorkerPanicGuard {
                 app: transcription_app.clone(),
@@ -342,7 +415,19 @@ fn start_system_audio_capture(
             let mut whisper_engine = whisper_engine;
             diagnostics::record("INFO", "Whisper transcription worker started");
             while transcription_running.load(Ordering::SeqCst) {
+                apply_ready_model_switches(
+                    &model_switch_rx,
+                    &transcription_generation,
+                    &transcription_app,
+                    &mut whisper_engine,
+                );
                 if let Some(segment) = transcription_queue.recv_timeout(Duration::from_millis(100)) {
+                    apply_ready_model_switches(
+                        &model_switch_rx,
+                        &transcription_generation,
+                        &transcription_app,
+                        &mut whisper_engine,
+                    );
                     let capture_delay_ms = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -391,6 +476,12 @@ fn start_system_audio_capture(
                             diagnostics::record("ERROR", format!("Whisper inference failed: {error}"));
                         }
                     }
+                    apply_ready_model_switches(
+                        &model_switch_rx,
+                        &transcription_generation,
+                        &transcription_app,
+                        &mut whisper_engine,
+                    );
                 }
             }
         });
@@ -505,8 +596,169 @@ fn start_system_audio_capture(
 }
 
 #[tauri::command]
+fn change_whisper_model(
+    app: AppHandle,
+    state: State<'_, AppAudioState>,
+    model_name: String,
+    language: String,
+) -> Result<String, String> {
+    if !matches!(model_name.as_str(), "tiny" | "base" | "small") {
+        return Err(format!("Unsupported Whisper model: {model_name}"));
+    }
+    if !matches!(language.as_str(), "auto" | "en" | "hi") {
+        return Err(format!("Unsupported transcription language: {language}"));
+    }
+
+    let switch_tx = state
+        .model_switch_tx
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone()
+        .ok_or_else(|| "Audio transcription is not running".to_string())?;
+    let generation = state
+        .model_switch_generation
+        .fetch_add(1, Ordering::SeqCst)
+        .saturating_add(1);
+    let current_generation = state.model_switch_generation.clone();
+    let model_load_lock = state.model_load_lock.clone();
+    let app_handle = app.clone();
+    let selected_model = model_name.clone();
+
+    diagnostics::record(
+        "INFO",
+        format!("Live Whisper model change requested; model={model_name}; language={language}"),
+    );
+    emit_model_status(
+        &app,
+        "downloading",
+        format!("Preparing Whisper {model_name} model while audio capture continues..."),
+        None,
+        None,
+    );
+
+    thread::spawn(move || {
+        let _model_load_guard = model_load_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+
+        let model_path = match stt::ensure_model_available(Some(&selected_model), |status| {
+            if current_generation.load(Ordering::SeqCst) == generation {
+                emit_model_status(
+                    &app_handle,
+                    status.status,
+                    status.message,
+                    status.downloaded_bytes,
+                    status.total_bytes,
+                );
+            }
+        }) {
+            Ok(path) => path,
+            Err(error) => {
+                if current_generation.load(Ordering::SeqCst) == generation {
+                    diagnostics::record(
+                        "ERROR",
+                        format!("Live Whisper model download failed: {error}"),
+                    );
+                    emit_model_status(
+                        &app_handle,
+                        "error",
+                        format!(
+                            "Could not prepare Whisper {selected_model}; the current model remains active. {error}"
+                        ),
+                        None,
+                        None,
+                    );
+                }
+                return;
+            }
+        };
+        if current_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+
+        emit_model_status(
+            &app_handle,
+            "loading",
+            format!("Loading Whisper {selected_model}; audio capture continues..."),
+            None,
+            None,
+        );
+        let language = match language.as_str() {
+            "en" => Some("en".to_string()),
+            "hi" => Some("hi".to_string()),
+            "auto" => None,
+            _ => unreachable!("language was validated before the worker started"),
+        };
+        let engine = match stt::WhisperEngine::new(&model_path, language) {
+            Ok(engine) => engine,
+            Err(error) => {
+                if current_generation.load(Ordering::SeqCst) == generation {
+                    diagnostics::record(
+                        "ERROR",
+                        format!("Live Whisper model initialization failed: {error}"),
+                    );
+                    emit_model_status(
+                        &app_handle,
+                        "error",
+                        format!(
+                            "Could not load Whisper {selected_model}; the current model remains active. {error}"
+                        ),
+                        None,
+                        None,
+                    );
+                }
+                return;
+            }
+        };
+        if current_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        if switch_tx
+            .send(LoadedWhisperModel {
+                generation,
+                model_name: selected_model.clone(),
+                engine,
+            })
+            .is_err()
+        {
+            diagnostics::record("ERROR", "Could not apply live Whisper model: transcription worker stopped");
+            emit_model_status(
+                &app_handle,
+                "error",
+                "Could not apply the selected Whisper model; restart audio capture and try again."
+                    .to_string(),
+                None,
+                None,
+            );
+        } else {
+            diagnostics::record(
+                "INFO",
+                format!("Whisper {selected_model} loaded; waiting for the current inference to finish"),
+            );
+            emit_model_status(
+                &app_handle,
+                "loading",
+                format!("Whisper {selected_model} is ready and will activate after current transcription."),
+                None,
+                None,
+            );
+        }
+    });
+
+    Ok(format!("Preparing Whisper {model_name} in the background"))
+}
+
+#[tauri::command]
 fn stop_system_audio_capture(app: AppHandle, state: State<'_, AppAudioState>) -> Result<String, String> {
     state.is_running.store(false, Ordering::SeqCst);
+    state.model_switch_generation.fetch_add(1, Ordering::SeqCst);
+    *state
+        .model_switch_tx
+        .lock()
+        .map_err(|error| error.to_string())? = None;
 
     #[cfg(target_os = "macos")]
     {
@@ -671,6 +923,7 @@ pub fn run() {
         .manage(AppAudioState::default())
         .invoke_handler(tauri::generate_handler![
             start_system_audio_capture,
+            change_whisper_model,
             stop_system_audio_capture,
             close_app,
             minimize_app,

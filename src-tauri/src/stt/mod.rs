@@ -214,7 +214,7 @@ impl WhisperEngine {
         params.set_suppress_blank(true);
 
         let n_threads = std::thread::available_parallelism()
-            .map(|p| (p.get() as i32).clamp(1, 4))
+            .map(|p| (p.get() as i32).clamp(1, 8))
             .unwrap_or(2);
         params.set_n_threads(n_threads);
 

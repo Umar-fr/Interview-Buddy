@@ -6,17 +6,17 @@ InterviewBuddy is a desktop app for live system-audio transcription and optional
 
 | Platform | Download |
 | --- | --- |
-| Windows 10/11 (x64) | [Download installer](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.5_x64-setup.exe) |
-| macOS (Intel) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.5_x64.dmg) |
-| macOS (Apple Silicon) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.5_aarch64.dmg) |
+| Windows 10/11 (x64) | [Download installer](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.6_x64-setup.exe) |
+| macOS (Intel) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.6_x64.dmg) |
+| macOS (Apple Silicon) | [Download DMG](https://github.com/Umar-fr/Interview-Buddy/releases/latest/download/InterviewBuddy_0.1.6_aarch64.dmg) |
 
-These links will work after the `v0.1.5` release is published. For earlier versions, visit [All Releases](https://github.com/Umar-fr/Interview-Buddy/releases).
+These links will work after the `v0.1.6` release is published. For earlier versions, visit [All Releases](https://github.com/Umar-fr/Interview-Buddy/releases).
 
 ### Installation notes
 
 - **Windows:** Run the downloaded installer. It installs per-user and downloads WebView2 if it is missing. Windows SmartScreen may show a warning because the installer is not signed.
 - **macOS:** Open the DMG and drag InterviewBuddy into Applications. The app is unsigned and may require Control-click → **Open** the first time. macOS 13 or later is required.
-- **First launch:** Choose a multilingual Whisper model (Tiny ~75 MB, Base ~150 MB, or Small ~500 MB) and a transcription language. Tiny is recommended for responsive live transcription on Windows; Windows users with the previous default Base model are moved to Tiny once. The **Downloads** button shows download progress; models are verified and cached under `%LOCALAPPDATA%\InterviewBuddy\models`. An internet connection is required for the initial download.
+- **First launch:** Choose a multilingual Whisper model (Tiny ~75 MB, Base ~150 MB, or Small ~500 MB) and a transcription language. Tiny is recommended for responsive live transcription on Windows; Windows users with the previous default Base model are moved to Tiny once. Model and language changes can be applied while audio capture continues; existing transcript history is kept. The **Downloads** button shows download progress; models are verified and cached under `%LOCALAPPDATA%\InterviewBuddy\models`. An internet connection is required for the initial download.
 - **Transcription languages:** Auto-detect is recommended for speech that mixes Hindi and English. Results vary with audio quality and code-switching.
 - **AI answers:** Add your own Gemini API key in the app settings. Speech transcription runs locally; Gemini features send the text you choose to process to Google.
 
@@ -37,7 +37,7 @@ These links will work after the `v0.1.5` release is published. For earlier versi
 - **No audio detected:** Check that sound is playing through the default output device. On macOS, grant Screen & System Audio Recording permission in System Settings.
 - **First transcription takes time:** The Whisper model downloads on first use; subsequent launches use the local copy.
 - **Model download status:** Open **Downloads** to see progress, verification, or a retry option if the model download fails.
-- **Slow or delayed transcription:** Open the Whisper model settings and select Tiny for the fastest CPU transcription. Continuous speech is grouped into longer segments instead of being cut every 1.5 seconds; pending old segments are replaced by newer speech when inference falls behind.
+- **Slow or delayed transcription:** Open the Whisper model settings and select Tiny for the fastest CPU transcription. Speech is emitted in shorter chunks to reduce the wait for the first result. Offline Whisper runs in batches, so true zero-latency captions are not possible; on slower CPUs inference can still fall behind and skip older queued segments to avoid an ever-growing delay.
 - **Audio or transcription stops unexpectedly:** Open **Logs**, select and copy the diagnostics, then share them with your bug report. The log does not include recorded audio or transcript text; review it before sharing.
 - **Gemini answers are unavailable:** Confirm that your Gemini API key and selected model are valid. Transcription does not require a Gemini key.
 

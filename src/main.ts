@@ -122,6 +122,7 @@ let selectedWhisperModel = storedWhisperModel === "tiny.en"
 let selectedWhisperLanguage = localStorage.getItem("whisper_language") || "auto";
 let userResume: string = localStorage.getItem("userResume") || "";
 let audioCaptureStarted = false;
+let whisperSettingsRequest = 0;
 let hasPromptedForGeminiApiKey = false;
 let latestModelStatus: ModelStatusPayload | null = null;
 let modelFileVerified = false;
@@ -260,9 +261,24 @@ function saveWhisperPreferences(model: string, language: string) {
   if (whisperLanguageSelect) whisperLanguageSelect.value = language;
   if (whisperSetupLanguageSelect) whisperSetupLanguageSelect.value = language;
 
-  if (audioCaptureStarted && modelStatus) {
-    modelStatus.textContent = "Speech model settings saved. Restart the app to apply them.";
+}
+
+function applyWhisperPreferencesLive() {
+  if (!audioCaptureStarted) return;
+
+  const request = ++whisperSettingsRequest;
+  const modelName = selectedWhisperModel || "tiny";
+  const language = selectedWhisperLanguage;
+  if (modelStatus) {
+    modelStatus.textContent = `Preparing Whisper ${modelName}; audio capture and transcript history will continue.`;
   }
+
+  void invoke("change_whisper_model", { modelName, language }).catch((error) => {
+    if (request !== whisperSettingsRequest) return;
+    const message = `Could not change speech model; the previous model remains active. ${error}`;
+    if (modelStatus) modelStatus.textContent = message;
+    recordDiagnostic("ERROR", message);
+  });
 }
 
 if (selectedWhisperModel && !["tiny", "base", "small"].includes(selectedWhisperModel)) {
@@ -281,9 +297,11 @@ if (whisperSetupLanguageSelect) whisperSetupLanguageSelect.value = selectedWhisp
 
 whisperModelSelect?.addEventListener("change", () => {
   saveWhisperPreferences(whisperModelSelect.value, whisperLanguageSelect?.value || "auto");
+  applyWhisperPreferencesLive();
 });
 whisperLanguageSelect?.addEventListener("change", () => {
   saveWhisperPreferences(whisperModelSelect?.value || "tiny", whisperLanguageSelect.value);
+  applyWhisperPreferencesLive();
 });
 
 autoAnswerCheckbox?.addEventListener("change", () => {

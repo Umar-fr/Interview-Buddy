@@ -166,7 +166,7 @@
             <option value="small">Small multilingual (~500 MB) - Higher accuracy, slower</option>
           </select>
           <span class="form-hint">
-            Multilingual models support English, Hindi, and mixed Hinglish. Tiny is recommended for faster live captions on Windows; larger models may take much longer on CPU. A model change applies after restarting the app.
+            Multilingual models support English, Hindi, and mixed Hinglish. Tiny is recommended for faster live captions on Windows; larger models may take much longer on CPU. Model and language changes download/load in the background without stopping audio capture.
           </span>
         </div>
 
@@ -273,7 +273,7 @@
           <div id="model-download-progress-bar" class="download-progress-bar"></div>
         </div>
         <div id="model-download-size" class="download-size">Progress will appear here when a model is needed.</div>
-        <p class="form-hint">Wait until the model is ready before playing audio for transcription.</p>
+        <p class="form-hint">During a model change, audio capture continues with the current model until the new one is ready. Transcription latency depends on your device; offline CPU recognition cannot provide true zero-latency captions.</p>
       </div>
       <div class="modal-footer">
         <button id="model-download-retry" class="btn-primary download-retry" hidden>Retry download</button>

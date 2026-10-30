@@ -23,11 +23,11 @@ impl AudioSegmenter {
         Self {
             sample_rate: sample_rate as u32,
             threshold: 0.010, // Sensitive RMS energy threshold
-            buffer: Vec::with_capacity(sample_rate * 5),
+            buffer: Vec::with_capacity(sample_rate * 3),
             is_speaking: false,
             silence_samples: 0,
-            max_speech_samples: sample_rate * 8,
-            trailing_silence_samples: sample_rate * 2 / 5,
+            max_speech_samples: sample_rate * 2,
+            trailing_silence_samples: sample_rate / 5,
             min_speech_samples: sample_rate * 3 / 10,
             speech_started_at_ms: None,
         }
@@ -108,8 +108,6 @@ mod tests {
             assert!(segmenter.process_samples(&speech).is_none());
         }
         assert!(segmenter.process_samples(&silence).is_none());
-        assert!(segmenter.process_samples(&silence).is_none());
-        assert!(segmenter.process_samples(&silence).is_none());
         let segment = segmenter.process_samples(&silence).unwrap();
 
         assert!(segment.samples.len() >= 16_000);
@@ -117,16 +115,16 @@ mod tests {
     }
 
     #[test]
-    fn keeps_continuous_sentences_together_and_only_splits_after_eight_seconds() {
+    fn emits_continuous_speech_in_two_second_chunks() {
         let mut segmenter = AudioSegmenter::new(16_000);
         let speech = vec![0.1; 16_000 / 10];
 
-        for _ in 0..79 {
+        for _ in 0..19 {
             assert!(segmenter.process_samples(&speech).is_none());
         }
 
         let segment = segmenter.process_samples(&speech);
         assert!(segment.is_some());
-        assert_eq!(segment.unwrap().samples.len(), 16_000 * 8);
+        assert_eq!(segment.unwrap().samples.len(), 16_000 * 2);
     }
 }
